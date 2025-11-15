@@ -66,6 +66,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'darkscript.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Configurar trust proxy para funcionar corretamente com proxies reversos (nginx, EasyPanel, etc.)
+app.set('trust proxy', true);
+
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -96,15 +99,17 @@ app.use(
         mediaSrc: ["'self'", "data:", "blob:"],
         connectSrc: [
           "'self'",
-          "http://*",
-          "https://*",
+          "http://173.249.59.149:3001",
+          "https://173.249.59.149:3001",
           "https://www.youtube.com",
           "https://i.ytimg.com",
           "https://yt3.ggpht.com",
           "https://i9.ytimg.com",
           "https://www.google.com"
         ],
-        formAction: ["'self'", "http://*", "https://*"],
+        // Remover restrição de formAction para permitir envio de formulários
+        // Isso resolve o problema de CSP bloqueando formulários
+        formAction: null,
         objectSrc: ["'none'"],
         frameSrc: [
           "'self'",
