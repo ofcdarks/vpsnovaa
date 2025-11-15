@@ -11,7 +11,8 @@ const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const sqlite3 = require('sqlite3').verbose();
 const crypto = require('crypto');
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsPromises = require('fs').promises;
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const ffprobePath = require('@ffprobe-installer/ffprobe').path;
@@ -134,8 +135,45 @@ const STATIC_ASSETS = new Map([
   ['/voices.js', path.join(__dirname, 'voices.js')]
 ]);
 
+// Servir arquivos estáticos com headers apropriados
 STATIC_ASSETS.forEach((filePath, route) => {
-  app.get(route, (_, res) => res.sendFile(filePath));
+  app.get(route, (req, res, next) => {
+    // Verificar se o arquivo existe
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.error(`❌ Arquivo não encontrado: ${filePath}`);
+        return res.status(404).send('Arquivo não encontrado');
+      }
+    } catch (err) {
+      console.error(`❌ Erro ao verificar arquivo ${filePath}:`, err.message);
+      return res.status(500).send('Erro ao verificar arquivo');
+    }
+    
+    // Log para debug
+    console.log(`📦 Servindo ${route} via ${req.protocol}://${req.get('host')}`);
+    
+    // Definir Content-Type correto
+    const contentType = route.endsWith('.css') 
+      ? 'text/css; charset=utf-8' 
+      : 'application/javascript; charset=utf-8';
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    
+    // Servir o arquivo
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error(`❌ Erro ao servir ${route}:`, err.message);
+        if (!res.headersSent) {
+          res.status(500).send('Erro ao carregar o arquivo');
+        }
+      } else {
+        console.log(`✅ ${route} servido com sucesso`);
+      }
+    });
+  });
 });
 
 // Health Check Endpoint
@@ -377,9 +415,9 @@ const parseJsonRobustly = (text, source = "AI") => {
 
 const initializeDb = async () => {
   try {
-    await fs.mkdir(TEMP_AUDIO_DIR, { recursive: true });
-    await fs.mkdir(FINAL_AUDIO_DIR, { recursive: true });
-    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+    await fsPromises.mkdir(TEMP_AUDIO_DIR, { recursive: true });
+    await fsPromises.mkdir(FINAL_AUDIO_DIR, { recursive: true });
+    await fsPromises.mkdir(UPLOADS_DIR, { recursive: true });
 
     await dbRun(`
       CREATE TABLE IF NOT EXISTS users (
@@ -665,7 +703,7 @@ const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, r
         const tempRawPath = path.join(TEMP_AUDIO_DIR, `temp_raw_${crypto.randomBytes(4).toString('hex')}.raw`);
         const tempMp3Path = path.join(TEMP_AUDIO_DIR, `temp_mp3_${crypto.randomBytes(4).toString('hex')}.mp3`);
 
-        await fs.writeFile(tempRawPath, audioBuffer);
+        await fsPromises.writeFile(tempRawPath, audioBuffer);
 
         await new Promise((resolve, reject) => {
             ffmpeg(tempRawPath)
@@ -684,12 +722,12 @@ const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, r
                 .save(tempMp3Path);
         });
 
-        const mp3Buffer = await fs.readFile(tempMp3Path);
+        const mp3Buffer = await fsPromises.readFile(tempMp3Path);
         const mp3Base64 = mp3Buffer.toString('base64');
 
         // Cleanup temporary files
-        await fs.unlink(tempRawPath);
-        await fs.unlink(tempMp3Path);
+        await fsPromises.unlink(tempRawPath);
+        await fsPromises.unlink(tempMp3Path);
 
         return {
             audioBase64: mp3Base64,
@@ -743,7 +781,7 @@ async function processLongTtsJob(jobId, jobData) {
             }
 
             const tempFilePath = path.join(TEMP_AUDIO_DIR, `${jobId}_part_${i}.mp3`);
-            await fs.writeFile(tempFilePath, audioBase64, 'base64');
+            await fsPromises.writeFile(tempFilePath, audioBase64, 'base64');
             tempFilePaths.push(tempFilePath);
         }
 
@@ -781,7 +819,7 @@ async function processLongTtsJob(jobId, jobData) {
     } finally {
         for (const filePath of tempFilePaths) {
             try {
-                await fs.unlink(filePath);
+                await fsPromises.unlink(filePath);
             } catch (unlinkError) {
                 console.warn(`Não foi possível excluir o arquivo temporário ${filePath}: ${unlinkError.message}`);
             }
@@ -966,7 +1004,7 @@ async function sendPasswordResetEmail(to, tempPassword) {
     const transporter = await getEmailTransporter();
 
     const templatePath = path.join(__dirname, 'email-template.html');
-    let emailHtml = await fs.readFile(templatePath, 'utf-8');
+    let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
     emailHtml = emailHtml.replace('{{TEMP_PASSWORD}}', tempPassword);
 
     const mailOptions = {
@@ -984,7 +1022,7 @@ async function sendActivationEmail(to, loginUrl = process.env.APP_URL || 'https:
         const transporter = await getEmailTransporter();
 
         const templatePath = path.join(__dirname, 'email-activation-template.html');
-        let emailHtml = await fs.readFile(templatePath, 'utf-8');
+        let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
         emailHtml = emailHtml.replace('{{LOGIN_URL}}', loginUrl);
 
         const mailOptions = {
@@ -1007,7 +1045,7 @@ async function sendCancellationEmail(to) {
         const transporter = await getEmailTransporter();
 
         const templatePath = path.join(__dirname, 'email-cancellation-template.html');
-        let emailHtml = await fs.readFile(templatePath, 'utf-8');
+        let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
 
         const mailOptions = {
             from: `"DARKSCRIPT AI" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
@@ -2894,7 +2932,7 @@ async function processScriptTtsJob(jobId, jobData) {
                 }
 
                 const tempFilePath = path.join(TEMP_AUDIO_DIR, `${jobId}_part_${globalIndex}.mp3`);
-                await fs.writeFile(tempFilePath, audioBase64, 'base64');
+                await fsPromises.writeFile(tempFilePath, audioBase64, 'base64');
                 
                 // ATUALIZA o progresso de forma ATÔMICA quando esta parte completa
                 // Incrementa o contador de forma sequencial para garantir progresso gradual
@@ -2987,7 +3025,7 @@ async function processScriptTtsJob(jobId, jobData) {
     } finally {
         for (const filePath of tempFilePaths) {
             try {
-                await fs.unlink(filePath);
+                await fsPromises.unlink(filePath);
             } catch (unlinkError) {
                 console.warn(`Não foi possível excluir o arquivo temporário ${filePath}: ${unlinkError.message}`);
             }
@@ -3072,7 +3110,7 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                     await fs.access(dirPath);
                 } catch {
                     // Diretório não existe, cria ele
-                    await fs.mkdir(dirPath, { recursive: true });
+                    await fsPromises.mkdir(dirPath, { recursive: true });
                     return 0;
                 }
 
@@ -3083,11 +3121,11 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                 for (const file of files) {
                     try {
                         const filePath = path.join(dirPath, file);
-                        const stats = await fs.stat(filePath);
+                        const stats = await fsPromises.stat(filePath);
                         
                         // Remove apenas arquivos (não diretórios)
                         if (stats.isFile()) {
-                            await fs.unlink(filePath);
+                            await fsPromises.unlink(filePath);
                             fileCount++;
                         } else if (stats.isDirectory()) {
                             // Se for um diretório, limpa recursivamente (mas não remove o diretório em si)
@@ -3095,9 +3133,9 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                             for (const subFile of subFiles) {
                                 try {
                                     const subFilePath = path.join(filePath, subFile);
-                                    const subStats = await fs.stat(subFilePath);
+                                    const subStats = await fsPromises.stat(subFilePath);
                                     if (subStats.isFile()) {
-                                        await fs.unlink(subFilePath);
+                                        await fsPromises.unlink(subFilePath);
                                         fileCount++;
                                     }
                                 } catch (subError) {
@@ -4016,7 +4054,7 @@ app.post('/api/admin/files/folder', verifyToken, requireAdmin, async (req, res) 
     }
 
     try {
-        await fs.mkdir(targetPath, { recursive: true });
+        await fsPromises.mkdir(targetPath, { recursive: true });
         res.status(201).json({ message: `Pasta '${folderName}' criada com sucesso.` });
     } catch (err) {
         console.error("Erro ao criar pasta:", err.message);
@@ -4830,12 +4868,12 @@ app.delete('/api/admin/files', verifyToken, requireAdmin, async (req, res) => {
     }
 
     try {
-        const stats = await fs.stat(absolutePath);
+        const stats = await fsPromises.stat(absolutePath);
         if (stats.isDirectory()) {
             await fs.rm(absolutePath, { recursive: true, force: true }); // Deleta diretório e conteúdo
             res.json({ message: `Pasta '${filePath}' e seu conteúdo excluídos com sucesso.` });
         } else {
-            await fs.unlink(absolutePath); // Deleta arquivo
+            await fsPromises.unlink(absolutePath); // Deleta arquivo
             res.json({ message: `Arquivo '${filePath}' excluído com sucesso.` });
         }
     } catch (err) {
