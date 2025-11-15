@@ -1,0 +1,1406 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DARKSCRIPT AI</title>
+    <base href="/">
+    <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="antialiased bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+
+    <div id="progress-panels-container" class="fixed right-4 bottom-4 z-[9000] w-80 space-y-4">
+        <div id="scene-gen-progress-panel" style="display: none;" class="p-4 bg-white dark:bg-gray-800 shadow-lg rounded-lg transition-all duration-300 ease-out border border-gray-200 dark:border-gray-700"></div>
+        <div id="voice-gen-progress-panel" style="display: none;" class="p-4 bg-white dark:bg-gray-800 shadow-lg rounded-lg transition-all duration-300 ease-out border border-gray-200 dark:border-gray-700"></div>
+        <div id="image-gen-progress-panel" style="display: none;" class="p-4 bg-white dark:bg-gray-800 shadow-lg rounded-lg transition-all duration-300 ease-out border border-gray-200 dark:border-gray-700"></div>
+        <div id="video-gen-progress-panel" style="display: none;" class="p-4 bg-white dark:bg-gray-800 shadow-lg rounded-lg transition-all duration-300 ease-out border border-gray-200 dark:border-gray-700"></div>
+    </div>
+
+    <div id="maintenance-overlay" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center text-center p-4">
+        <div class="max-w-md text-white">
+            <h2 class="text-3xl font-bold mb-2">Em Manutencao</h2>
+            <p id="maintenance-message" class="text-gray-300 mb-6">Estamos a realizar melhorias. Voltaremos em breve!</p>
+            <button id="logout-from-maintenance" class="bg-white/10 hover:bg-white/20 text-white font-medium py-2 px-4 rounded-lg">Sair</button>
+        </div>
+    </div>
+
+    <div id="announcement-overlay" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9998] flex items-center justify-center p-4">
+        <div class="max-w-md relative bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl text-gray-900 dark:text-gray-100">
+             <button id="close-announcement-btn" class="absolute top-3 right-3 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 text-2xl">&times;</button>
+            <h2 class="text-2xl font-bold text-blue-600 dark:text-blue-500 mb-2">Aviso Importante</h2>
+            <p id="announcement-message" class="text-gray-600 dark:text-gray-300 whitespace-pre-wrap"></p>
+        </div>
+    </div>
+
+    <div id="activation-container" style="display: none;" class="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 p-4">
+        <div class="w-full max-w-md p-8 space-y-4 text-center rounded-xl bg-white/50 dark:bg-gray-800/50 backdrop-blur-lg border border-gray-200 dark:border-gray-700">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Ativacao Pendente</h2>
+            <p class="text-gray-600 dark:text-gray-300">A sua conta foi registada com sucesso, mas precisa de ser ativada por um administrador.</p>
+            <button id="back-to-login" class="text-sm text-blue-600 dark:text-blue-500 hover:underline font-medium mt-4">Voltar para o Login</button>
+        </div>
+    </div>
+
+    <div id="auth-section" class="flex items-center justify-center min-h-screen p-4 bg-gray-100 dark:bg-gray-900">
+        <div class="w-full max-w-md text-center">
+            <div class="mx-auto mb-8 flex flex-col items-center">
+                <span class="text-7xl mb-4">🧠</span>
+                <h1 class="text-4xl font-bold tracking-tight text-gray-900 dark:text-gray-100 font-premium">Bem-vindo a DARKSCRIPT AI</h1>
+                <p class="mt-2 text-gray-600 dark:text-gray-400">Inteligencia artificial para criadores de conteudo.</p>
+            </div>
+
+            <div id="login-container" class="p-8 space-y-6 rounded-xl bg-white/50 dark:bg-gray-800/50 backdrop-blur-lg border border-gray-200 dark:border-gray-700">
+                <form id="login-form" class="space-y-6">
+                    <div id="login-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                    <input id="login-email" type="email" autocomplete="email" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="Email">
+                    <input id="login-password" type="password" autocomplete="current-password" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500" placeholder="Senha">
+                    <div class="flex items-center justify-between text-sm">
+                        <div class="flex items-center gap-2">
+                            <input id="remember-me" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 dark:bg-gray-700 dark:border-gray-600">
+                            <label for="remember-me" class="text-gray-600 dark:text-gray-400">Lembrar-me</label>
+                        </div>
+                        <button id="show-password-reset" type="button" class="text-xs font-medium text-blue-600 dark:text-blue-500 hover:underline">Esqueceu a senha?</button>
+                    </div>
+                    <button type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Entrar</button>
+                </form>
+                <p class="text-center text-sm text-gray-600 dark:text-gray-400">Nao tem uma conta? <button id="show-register" class="font-medium text-blue-600 dark:text-blue-500 hover:underline">Registre-se</button></p>
+            </div>
+
+            <div id="register-container" class="p-8 space-y-6 rounded-xl bg-white/50 dark:bg-gray-800/50 backdrop-blur-lg border border-gray-200 dark:border-gray-700" style="display: none;">
+                <form id="register-form" class="space-y-6">
+                    <div id="register-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                    <div>
+                        <input id="register-email" type="email" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Seu melhor e-mail">
+                        <p class="text-xs text-center text-gray-500 dark:text-gray-400 mt-1">Use o mesmo e-mail da sua compra.</p>
+                    </div>
+                    <input id="register-whatsapp" type="tel" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Seu WhatsApp (com DDD)">
+                    <input id="register-password" type="password" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Crie uma senha forte">
+                    <button type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Criar Conta</button>
+                </form>
+                <p class="text-center text-sm text-gray-600 dark:text-gray-400">Ja tem uma conta? <button id="show-login" class="font-medium text-blue-600 dark:text-blue-500 hover:underline">Faca login</button></p>
+            </div>
+        </div>
+    </div>
+    
+    <div id="progress-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm flex items-center justify-center z-[10001] p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 text-center shadow-2xl w-full max-w-sm rounded-2xl flex flex-col items-center">
+            <div class="relative w-32 h-32 mx-auto mb-6" id="progress-circle-container">
+                 <svg class="w-full h-full" viewBox="0 0 100 100">
+                    <defs>
+                        <linearGradient id="progressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" /> <stop offset="100%" style="stop-color:#6366F1;stop-opacity:1" /> </linearGradient>
+                    </defs>
+                    <circle id="progress-circle-bg" stroke-width="10" class="stroke-gray-200 dark:stroke-gray-700" fill="transparent" r="45" cx="50" cy="50" />
+                    <circle id="progress-circle" stroke-width="10" stroke-linecap="round" stroke="url(#progressGradient)" fill="transparent" r="45" cx="50" cy="50" class="transition-all duration-500 ease-out" />
+                </svg>
+                <div id="progress-percentage" class="absolute inset-0 flex items-center justify-center text-4xl font-bold text-blue-600 dark:text-blue-500">0%</div>
+            </div>
+            <p id="progress-task-message" class="font-poppins text-lg text-gray-900 dark:text-gray-100 font-medium h-auto flex items-center justify-center leading-tight text-center"></p>
+            <p id="progress-motivational-phrase" class="font-poppins text-base text-gray-500 dark:text-gray-400 h-auto flex items-center justify-center leading-tight text-center mt-4"></p>
+            <p id="progress-part-counter" class="text-sm text-gray-500 dark:text-gray-400 mt-2 h-5"></p>
+            
+            <div id="part-progress-bar-container" class="mt-4 w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden" style="display: none;">
+                <div id="part-progress-bar" class="h-full bg-blue-600 dark:bg-blue-500 transition-all duration-300 ease-out" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirmation-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10003] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <h3 id="confirmation-title" class="text-lg font-bold text-gray-900 dark:text-gray-100"></h3>
+            <p id="confirmation-message" class="text-gray-600 dark:text-gray-300 my-4"></p>
+            <div class="flex justify-center gap-4">
+                <button id="cancel-btn" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Cancelar</button>
+                <button id="confirm-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg">Confirmar</button>
+            </div>
+        </div>
+    </div>
+    
+     <div id="success-toast" class="bg-green-500 text-white font-semibold py-3 px-6 rounded-full shadow-lg flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span id="success-toast-message"></span>
+    </div>
+    
+    <div id="api-alert-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9997] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 dark:bg-yellow-900/20 mb-4">
+                <svg class="h-6 w-6 text-yellow-600 dark:text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Acao Necessaria</h3>
+            <p class="text-gray-600 dark:text-gray-300 my-2">Nenhuma chave de API foi encontrada. A plataforma precisa de pelo menos uma chave (Claude ou Gemini) para funcionar.</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mb-6">Este aviso so aparecera uma vez por sessao.</p>
+            <div class="flex justify-center gap-4">
+                <button id="close-api-alert-btn" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Fechar</button>
+                <button id="go-to-settings-btn" class="bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">Configurar API</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="whatsapp-update-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <div id="whatsapp-form-container">
+                <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 dark:bg-blue-900/20 mb-4">
+                    <svg class="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a2 2 0 01-2-2V7a2 2 0 012-2h2.586a1 1 0 01.707.293l2.414 2.414a1 1 0 01.293.707V8z"></path></svg>
+                </div>
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Atualize seu Contato</h3>
+                <p class="text-gray-600 dark:text-gray-300 my-2">Para garantir o melhor suporte e acesso a novidades, por favor, confirme seu numero de WhatsApp.</p>
+                <form id="whatsapp-update-form" class="mt-4 space-y-4">
+                    <input id="update-whatsapp-input" type="tel" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Seu WhatsApp (com DDD)">
+                    <div id="whatsapp-update-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                    <button type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Salvar e Continuar</button>
+                </form>
+            </div>
+            <div id="whatsapp-success-container" style="display: none;">
+                 <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/20 mb-4">
+                     <svg class="h-10 w-10 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                 </div>
+                <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">DARKSCRIPT AI Liberado!</h2>
+            </div>
+        </div>
+    </div>
+
+    <div id="force-password-change-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10002] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">Alteracao de Senha Necessaria</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Por seguranca, a sua senha foi redefinida. Por favor, crie uma nova senha para continuar.</p>
+            <form id="force-password-change-form" class="space-y-4">
+                <input id="new-password-input" type="password" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Nova senha">
+                <input id="confirm-new-password-input" type="password" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Confirme a nova senha">
+                <div id="force-password-change-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                <button type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Salvar Nova Senha</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="password-reset-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10002] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">Redefinir Senha</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Insira seu e-mail para receber uma senha temporaria no seu e-mail e WhatsApp cadastrados.</p>
+            <form id="password-reset-form" class="space-y-4">
+                <input id="reset-email-input" type="email" required class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Seu e-mail de cadastro">
+                <div id="password-reset-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                <button type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Enviar Senha Temporaria</button>
+                <button type="button" id="cancel-password-reset" class="w-full justify-center py-3 px-4 rounded-lg font-semibold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">Cancelar</button>
+            </form>
+        </div>
+    </div>
+    
+    <div id="edit-user-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10002] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-4">Gerir Utilizador</h3>
+            <form id="edit-user-form" class="space-y-4">
+                <input type="hidden" id="edit-user-id">
+                <div>
+                    <label for="edit-user-email" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Email</label>
+                    <input id="edit-user-email" type="email" required class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white">
+                </div>
+                <div>
+                    <label for="edit-user-whatsapp" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">WhatsApp</label>
+                    <input id="edit-user-whatsapp" type="tel" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white">
+                </div>
+                <div>
+                    <label for="edit-user-tags" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Tags</label>
+                    <input id="edit-user-tags" type="text" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="cliente,vip,teste">
+                </div>
+                <div id="edit-user-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                <div class="flex flex-col gap-2 mt-6">
+                    <button id="save-edit-btn" type="submit" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Salvar Alteracoes</button>
+                    <button id="reset-password-btn" type="button" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-6 rounded-lg">Redefinir Senha</button>
+                    <button id="toggle-status-btn" type="button" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg">Ativar/Bloquear Utilizador</button>
+                    <button id="toggle-role-btn" type="button" class="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-6 rounded-lg">Alterar Cargo</button>
+                    <button id="delete-user-btn" type="button" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg">Excluir Utilizador</button>
+                    <button id="cancel-edit-btn" type="button" class="w-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div id="image-lightbox-modal" style="display: none;" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10005] flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300">
+        <button id="close-lightbox-btn" class="absolute top-4 right-6 text-white text-5xl font-light hover:text-gray-300 z-20">&times;</button>
+        <button id="lightbox-prev-btn" class="absolute left-4 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 text-white p-3 rounded-full z-20">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <button id="lightbox-next-btn" class="absolute right-4 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 text-white p-3 rounded-full z-20">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+        </button>
+        <div class="relative max-w-5xl max-h-[90vh] w-full h-full flex flex-col items-center justify-center">
+            <img id="lightbox-image" src="" alt="Imagem Ampliada" class="max-w-full max-h-full object-contain rounded-lg shadow-2xl">
+        </div>
+    </div>
+
+    <div id="image-gen-complete-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10004] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900/20 mb-4">
+                <svg class="h-6 w-6 text-green-600 dark:text-green-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Geracao Concluida!</h3>
+            <p class="text-gray-600 dark:text-gray-300 my-4">Suas imagens foram geradas com sucesso e ja estao disponiveis na tela.</p>
+            <p id="image-gen-duration" class="text-sm text-gray-500 dark:text-gray-400 mb-4"></p>
+            <div class="flex justify-center gap-4">
+                <button id="close-image-gen-modal-btn" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Fechar</button>
+                <button id="view-generated-images-btn" class="bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">Ver Imagens</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="scene-gen-complete-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10004] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900/20 mb-4">
+                <svg class="h-6 w-6 text-green-600 dark:text-green-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Prompts Concluidos!</h3>
+            <p class="text-gray-600 dark:text-gray-300 my-4">Seus prompts de cena foram gerados com sucesso e ja estao disponiveis na tela.</p>
+            <p id="scene-gen-duration" class="text-sm text-gray-500 dark:text-gray-400 mb-4"></p>
+            <div class="flex justify-center gap-4">
+                <button id="close-scene-gen-modal-btn" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Fechar</button>
+                <button id="view-generated-scenes-btn" class="bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">Ver Prompts</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="voice-gen-complete-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10004] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900/20 mb-4">
+                <svg class="h-6 w-6 text-green-600 dark:text-green-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Narracao Concluida!</h3>
+            <p class="text-gray-600 dark:text-gray-300 my-4">Sua narracao foi gerada com sucesso e esta pronta para download.</p>
+            <div class="flex flex-col justify-center gap-4">
+                <a id="download-voice-gen-btn" href="#" download="narracao_darkscript.mp3" class="w-full block text-center py-3 px-4 rounded-lg font-semibold bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white">
+                    Baixar Narracao (.mp3)
+                </a>
+                <button id="close-voice-gen-modal-btn" class="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="translation-complete-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10004] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-sm text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900/20 mb-4">
+                <svg class="h-6 w-6 text-green-600 dark:text-green-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Traducao Concluida!</h3>
+            <p class="text-gray-600 dark:text-gray-300 my-4">Seu roteiro foi traduzido com sucesso para todos os idiomas selecionados.</p>
+            <div class="flex justify-center gap-4">
+                <button id="close-translation-modal-btn" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="academy-lesson-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10004] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-2xl">
+            <h3 id="lesson-modal-title" class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">Adicionar Nova Aula</h3>
+            <form id="academy-lesson-form" class="space-y-4">
+                <input type="hidden" id="lesson-id">
+                <div>
+                    <label for="lesson-title" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Título da Aula</label>
+                    <input id="lesson-title" type="text" required class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white">
+                </div>
+                <div>
+                    <label for="lesson-description" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Descrição</label>
+                    <textarea id="lesson-description" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white"></textarea>
+                </div>
+                <div>
+                    <label for="lesson-youtube-url" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">URL do Vídeo do YouTube</label>
+                    <input id="lesson-youtube-url" type="url" required class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="lesson-file-url" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">URL do Arquivo (Opcional)</label>
+                        <input id="lesson-file-url" type="url" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="lesson-file-name" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Nome do Arquivo (Opcional)</label>
+                        <input id="lesson-file-name" type="text" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Ex: Planilha de Custos.xlsx">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="lesson-tag-text" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Texto da Tag (Opcional)</label>
+                        <input id="lesson-tag-text" type="text" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Ex: Novo!, Exclusivo">
+                    </div>
+                    <div>
+                        <label for="lesson-tag-position" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Posição da Tag</label>
+                        <select id="lesson-tag-position" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            <option value="top-2 left-2">Superior Esquerdo</option>
+                            <option value="top-2 right-2">Superior Direito</option>
+                            <option value="bottom-2 left-2">Inferior Esquerdo</option>
+                            <option value="bottom-2 right-2">Inferior Direito</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="lesson-form-feedback" class="text-red-500 text-sm text-center min-h-[20px]"></div>
+                <div class="flex justify-end gap-4 mt-6">
+                    <button id="cancel-lesson-btn" type="button" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-6 rounded-lg">Cancelar</button>
+                    <button id="save-lesson-btn" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="video-player-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10006] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-xl w-full max-w-3xl relative">
+            <button id="close-video-modal-btn" class="absolute top-2 right-2 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 text-2xl z-[10007]">&times;</button>
+            <div class="relative w-full" style="padding-top: 56.25%;">
+                <iframe id="video-player-iframe" class="absolute top-0 left-0 w-full h-full rounded-lg" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+            <h3 id="video-modal-title" class="text-xl font-bold text-gray-900 dark:text-gray-100 mt-4 mb-2"></h3>
+            <p id="video-modal-description" class="text-gray-600 dark:text-gray-300 text-sm"></p>
+            <a id="video-modal-external-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 015.656 5.656l-6.364 6.364a4 4 0 01-5.656-5.656l1.414-1.414m9.9-9.9h-5.5m5.5 0v5.5m0-5.5L10.414 13" />
+                </svg>
+                Abrir no YouTube
+            </a>
+            <p id="video-modal-fallback" class="hidden text-xs text-gray-500 dark:text-gray-400 mt-2">Se o player mostrar o erro 153, clique em “Abrir no YouTube”.</p>
+        </div>
+    </div>
+
+    <div id="app-container" style="display: none;" class="h-screen flex">
+        <div id="menu-overlay" class="hidden md:hidden fixed inset-0 bg-black/50 z-30"></div>
+        <aside id="sidebar" class="w-72 bg-white dark:bg-gray-800 flex-shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-700">
+             <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 h-16">
+                 <span class="text-2xl">🧠</span>
+                 <span class="text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">DARKSCRIPT AI</span>
+            </div>
+            <nav id="sidebar-nav" class="flex-1 overflow-y-auto py-2"></nav>
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700">
+                <div class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700">
+                    <p class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate" id="user-email-display"></p>
+                </div>
+                <div class="flex items-center mt-2 gap-2">
+                    <button id="logout-btn" class="flex-1 text-left flex items-center gap-3 px-3 py-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-gray-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V5h10a1 1 0 100-2H3zm12.293 4.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L16.586 13H9a1 1 0 110-2h7.586l-1.293-1.293a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+                        <span>Sair</span>
+                    </button>
+                    <button id="theme-toggle-btn" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-gray-100" title="Alternar tema">
+                        <svg id="theme-icon-light" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                        <svg id="theme-icon-dark" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </aside>
+        <div id="main-content" class="flex-1 flex flex-col overflow-hidden bg-gray-100 dark:bg-gray-900">
+            <header class="p-4 md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center h-16">
+                <button id="open-menu-btn" class="text-2xl text-gray-500 dark:text-gray-400">☰</button>
+                <h2 id="mobile-header-title" class="ml-4 font-semibold text-lg text-gray-900 dark:text-gray-100"></h2>
+            </header>
+            <main id="tab-content" class="flex-1 p-6 md:p-8 overflow-y-auto"></main>
+            <footer id="log-bar" class="p-2 text-xs text-center flex items-center justify-center h-8 border-t border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+                <span id="log-message">Bem-vindo!</span>
+            </footer>
+        </div>
+    </div>
+
+    <template id="brainstorm-ideas-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Brainstorm de Ideias</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gere ideias de videos virais para o seu nicho e nunca mais sofra com bloqueio criativo.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div>
+                        <label for="brainstorm-niche" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Nicho do Canal</label>
+                        <input type="text" id="brainstorm-niche" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: Curiosidades, True Crime, Financas Pessoais...">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="brainstorm-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma</label>
+                            <select id="brainstorm-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                        <div>
+                            <label for="brainstorm-ideas-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                            <select id="brainstorm-ideas-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                        </div>
+                    </div>
+                    <button id="generate-brainstorm-ideas" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Ideias</button>
+                </div>
+                <div id="legend-container" class="mt-6"></div>
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+                <button id="generate-more-brainstorm-ideas" style="display:none;" class="w-full mt-4 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">Gerar Mais</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="script-writer-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Criador de Roteiro</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gere roteiros envolventes e otimizados para o seu canal.</p>
+            <div class="max-w-3xl mx-auto">
+                <form id="script-writer-form-container" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="script-niche" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Nicho do Canal</label>
+                            <input type="text" id="script-niche" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: Crimes Reais, Misterios">
+                        </div>
+                        <div>
+                            <label for="script-audience" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Publico-Alvo</label>
+                            <input type="text" id="script-audience" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: Jovens adultos, fas de suspense">
+                        </div>
+                    </div>
+                    <div>
+                        <label for="script-topic" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Tema do Video</label>
+                        <input type="text" id="script-topic" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: O Misterio do Triangulo das Bermudas">
+                    </div>
+                    <div>
+                        <label for="script-trends-term" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Termo de Pesquisa (Opcional)</label>
+                        <input type="text" id="script-trends-term" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: inteligencia artificial, true crime brasil">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label for="script-duration" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Duracao (min)</label>
+                            <input type="number" id="script-duration" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: 10" max="65">
+                        </div>
+                        <div>
+                            <label for="script-parts" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Partes (Automatico)</label>
+                            <input type="number" id="script-parts" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-200 dark:bg-gray-600 cursor-not-allowed border-gray-300 dark:border-gray-500 text-gray-700 dark:text-gray-300" readonly>
+                        </div>
+                        <div>
+                            <label for="script-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma</label>
+                            <select id="script-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                       <label for="script-tone" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Tom Narrativo</label>
+                       <select id="script-tone" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                           <option value="envolvente e misterioso">Envolvente e Misterioso</option>
+                           <option value="informativo e claro">Informativo e Claro</option>
+                           <option value="comico e divertido">Comico e Divertido</option>
+                           <option value="serio e formal">Serio e Formal</option>
+                           <option value="inspirador e motivacional">Inspirador e Motivacional</option>
+                       </select>
+                    </div>
+                    <div>
+                        <label for="script-formula" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Formula de Estrutura</label>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            Selecione a formula que definira a estrutura e as tecnicas de alta retencao do seu roteiro.
+                        </p>
+                        <select id="script-formula" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            <option value="" disabled>-- Selecione uma Formula --</option> </select>
+                    </div>
+                    <div id="manual-structure-container" style="display: none;">
+                        <label for="manual-structure-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Estrutura Manual do Roteiro</label>
+                        <textarea id="manual-structure-input" class="mt-1 w-full h-32 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Ex: PARTE 1: Introducao chocante sobre o caso. PARTE 2: Detalhes da investigacao inicial..."></textarea>
+                    </div>
+                     <div>
+                        <label class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Posicao do CTA (Chamada para Acao)</label>
+                        <div class="mt-2 flex items-center space-x-4">
+                            <div class="flex items-center"><input id="cta-inicio" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500"><label for="cta-inicio" class="ml-2 text-sm">Inicio</label></div>
+                            <div class="flex items-center"><input id="cta-meio" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500" checked><label for="cta-meio" class="ml-2 text-sm">Meio</label></div>
+                            <div class="flex items-center"><input id="cta-final" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500"><label for="cta-final" class="ml-2 text-sm">Final</label></div>
+                        </div>
+                     </div>
+                    <div class="flex items-center justify-between flex-wrap gap-4">
+                       <div class="flex items-center gap-2">
+                         <input type="checkbox" id="script-narration" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500">
+                         <label for="script-narration" class="text-sm text-gray-500 dark:text-gray-400">Apenas Narracao (para Voice Over)</label>
+                       </div>
+                       <div class="flex items-center gap-2">
+                         <input type="checkbox" id="include-affiliate-product" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500">
+                         <label for="include-affiliate-product" class="text-sm text-gray-500 dark:text-gray-400 font-medium">Incluir produto de afiliacao</label>
+                       </div>
+                    </div>
+                    <div id="affiliate-product-container" style="display: none;">
+                       <label for="affiliate-product-description" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Descreva o Produto</label>
+                       <input type="text" id="affiliate-product-description" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: um curso online sobre marketing digital">
+                    </div>
+                    <div>
+                        <label for="script-writer-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="script-writer-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        </select>
+                    </div>
+                    <button id="generate-script" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Roteiro</button>
+                </form>
+                <div id="legend-container" class="mt-6"></div>
+                <div id="output" class="mt-6"></div>
+                <div id="script-pagination-controls" class="mt-4"></div>
+                <div id="script-history-container" class="mt-8"></div>
+            </div>
+        </div>
+    </template>
+    
+    <template id="script-reviewer-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Revisor de Roteiro Viral</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Analise e aprimore seu roteiro para maximizar o potencial de viralizacao.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <label for="reviewer-input-text" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro para Analise</label>
+                    <textarea id="reviewer-input-text" class="mt-1 w-full h-64 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o roteiro completo aqui para analise..."></textarea>
+                    
+                    <div id="manual-correction-container" class="bg-gray-100 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Correcao Manual</h3>
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">Diga a IA exatamente o que voce quer mudar no roteiro.</p>
+                        <textarea id="manual-correction-input" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Ex: 'Torne a introducao mais impactante', 'Adicione uma piada na Parte 3'..."></textarea>
+                        <button id="apply-manual-btn" type="button" class="mt-4 w-full justify-center py-2 px-4 rounded-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-4 focus:ring-indigo-300 dark:bg-indigo-500 dark:hover:bg-indigo-600 dark:focus:ring-indigo-800">Aplicar Correcao Manual</button>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <div>
+                            <label for="reviewer-duration" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Duracao (min)</label>
+                            <input type="number" id="reviewer-duration" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Opcional">
+                        </div>
+                        <div>
+                            <label for="reviewer-parts" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Partes (Automatico)</label>
+                            <input type="number" id="reviewer-parts" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-200 dark:bg-gray-600 cursor-not-allowed border-gray-300 dark:border-gray-500 text-gray-700 dark:text-gray-300" readonly>
+                        </div>
+                        <div>
+                            <label for="reviewer-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma</label>
+                            <select id="reviewer-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="script-reviewer-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="script-reviewer-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                    </div>
+                    <button id="analyze-script-btn" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Analisar Roteiro</button>
+                </div>
+                
+                <div id="reviewer-output" class="mt-6 space-y-6">
+                    <div id="reviewer-original-scores-container" style="display: none;">
+                        <h3 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">Pontuacao Original</h3>
+                        <div id="reviewer-original-score-cards"></div>
+                    </div>
+
+                    <div id="reviewer-suggestions-output"></div>
+
+                    <div id="improvement-actions-container" style="display: none;" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-2">
+                        <button id="apply-suggestions-btn" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Aplicar Sugestoes Automaticamente</button>
+                    </div>
+
+                    <div id="reviewer-revised-script-output" class="mt-6" style="display: none;">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Roteiro Revisado</h3>
+                            <div class="flex gap-2">
+                                <button id="copy-revised-script-btn" class="text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded-md hover:bg-blue-200 font-semibold dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Copiar Roteiro</button>
+                                <button id="download-revised-script-btn" class="text-sm bg-green-100 text-green-800 px-3 py-1 rounded-md hover:bg-green-200 font-semibold ml-2 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/40">Transferir .txt</button>
+                            </div>
+                        </div>
+                        <textarea id="reviewer-revised-script-textarea" class="mt-1 w-full h-64 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" readonly></textarea>
+                    </div>
+                    
+                    <div id="reviewer-new-scores-container" style="display: none;">
+                        <h3 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">Nova Pontuacao</h3>
+                        <div id="reviewer-new-score-cards"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="optimizer-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Otimizador de Descricao</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gere descricoes, tags e frases de thumbnail otimizadas para SEO e CTR.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div>
+                        <label for="optimizer-title" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Titulo Principal do Video</label>
+                        <input type="text" id="optimizer-title" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Insira o titulo que voce planeja usar...">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="optimizer-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma</label>
+                            <select id="optimizer-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                        <div>
+                            <label for="optimizer-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                            <select id="optimizer-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" id="optimizer-cta" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500" checked>
+                        <label for="optimizer-cta" class="text-sm text-gray-500 dark:text-gray-400">Incluir Chamada para Acao (CTA) na descricao</label>
+                    </div>
+                    <button id="optimize-script-btn" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Otimizar Conteudo</button>
+                </div>
+                <div id="output" class="mt-6 space-y-6"></div>
+                <button id="generate-more-optimizer-content" style="display:none;" class="w-full mt-4 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">Gerar Mais</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="viral-titles-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Titulos Virais</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Crie titulos e estruturas magneticas para multiplicar suas visualizacoes.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <label for="viral-topic" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Tema Central</label>
+                    <input type="text" id="viral-topic" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="ex: como investir em acoes">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="viral-type" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Tipo de Geracao</label>
+                            <select id="viral-type" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="titles">Gerar Titulos Prontos</option>
+                                <option value="structures">Gerar Estruturas de Titulos</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="viral-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma</label>
+                            <select id="viral-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                    </div>
+                     <div>
+                        <label for="viral-titles-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="viral-titles-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        </select>
+                    </div>
+                    <button id="generate-viral-content" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Conteudo</button>
+                </div>
+                <div id="legend-container" class="mt-6"></div>
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+                <button id="generate-more-viral-content" style="display:none;" class="w-full mt-4 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">Gerar Mais</button>
+            </div>
+        </div>
+    </template>
+    
+    <template id="script-translator-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Tradutor de Roteiros</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Traduza seu roteiro para multiplos idiomas com um clique.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <label for="translator-input-text" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro Completo</label>
+                    <textarea id="translator-input-text" class="mt-1 w-full h-40 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o roteiro completo aqui..."></textarea>
+                    <button id="import-last-script-for-translator" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Importar Ultimo Roteiro Gerado</button>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Selecione os idiomas para traducao:</label>
+                        <div id="translator-lang-options" class="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                            </div>
+                    </div>
+                     <div>
+                        <label for="script-translator-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="script-translator-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        </select>
+                    </div>
+                    <button id="translate-script" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Traduzir Roteiro</button>
+                </div>
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="scene-prompts-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Prompts para Cenas</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gere prompts de imagem para o seu roteiro.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div class="relative">
+                        <label for="scene-text" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro Completo</label>
+                        <textarea id="scene-text" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o roteiro completo aqui..."></textarea>
+                        <div id="scene-word-counter" class="absolute bottom-2 right-3 text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-600 px-2 py-0.5 rounded">0 palavras</div>
+                    </div>
+                    <button id="import-last-script-for-scenes" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Importar Ultimo Roteiro Gerado</button>
+                    <div id="script-mode-options" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label for="generation-mode" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modo de Geracao</label>
+                                <select id="generation-mode" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                    <option value="auto">Geracao Automatica de Cenas</option>
+                                    <option value="manual">Geracao Manual por Palavras</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="scene-style" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Estilo da Cena</label>
+                                <select id="scene-style" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                    <optgroup label="Estilos Populares">
+                                        <option value="photorealistic" data-description="Cria imagens que se assemelham a fotografias reais, com alta fidelidade de detalhes, texturas e iluminacao.">📸 Foto realista</option>
+                                        <option value="cinematic" data-description="Emula a aparencia de um filme, com iluminacao dramatica, cores corrigidas e enquadramento cuidadoso para contar uma historia.">🎬 Cinematografico</option>
+                                        <option value="anime" data-description="Estilo de animacao japonesa, caracterizado por olhos grandes, cabelos coloridos e expressoes faciais exageradas.">🌸 Anime</option>
+                                        <option value="fantasy" data-description="Cria mundos e criaturas magicas, com elementos surreais, medievais ou mitologicos.">✨ Fantasia</option>
+                                        <option value="stick figure" data-description="Minimalista, comico e simbolico. Transmite emocao e humor mesmo com simplicidade. Ideal para versoes curtas e historias metaforicas.">🎨 1. Desenho de Palitos (Stick Figure)</option>
+                                        <option value="cartoon" data-description="Estilo 2D colorido, expressivo e emocional. Funciona para narrativas leves, parabolas e historias familiares com toque simbolico.">🧸 2. Desenho Animado (Cartoon)</option>
+                                        <option value="Whiteboard-style illustrations (whiteboard animation) with simple, colorful, hand-drawn drawings. Use money, charts, and visual representations of investments. The background should be white, and the elements should have black outlines, with accents in vibrant colors like yellow, green, and red to highlight important information." data-description="Estilo de “aula visual”, com desenhos sendo feitos enquanto a narracao acontece. Ideal para explicar licoes morais ou reflexoes filosoficas.">✏️ 3. Animacao de Quadro Branco (Whiteboard)</option>
+                                        <option value="modern documentary style, clean visuals, slightly desaturated colors, professional lighting" data-description="Visual limpo, realista e cinematografico. Mistura narracao emocional com estetica de serie documental Netflix.">🎥 4. Documentario Moderno (Modern Documentary)</option>
+                                        <option value="vibrant viral style, bright saturated colors, high energy, wide-angle shots, dynamic composition" data-description="Cores fortes, transicoes rapidas e textos dinamicos na tela. Projetado para gerar alto CTR e retencao, especialmente em Shorts.">⚡ 5. Estilo Viral Vibrante (Viral Vibrant)</option>
+                                        <option value="minimalist tech aesthetic, sleek design, dark backgrounds, focused studio lighting, clean lines" data-description="Foco em simplicidade e abstracao. Fundo branco, fontes modernas, sounds sutis e narracao limpa. Transmite introspeccao moderna e clareza mental.">🧠 6. Estetica Tech Minimalista (Tech Minimalist)</option>
+                                        <option value="analog horror style, grainy footage, VHS look, unsettling atmosphere, liminal spaces, found footage" data-description="Visual retro VHS, ruido e distorcoes de fita. Cria tensao e medo psicologico. Excelente para historias com segredos, paranoia ou trauma.">📼 7. Terror Analogico (Analog Horror)</option>
+                                        <option value="cinematic storytelling, filmic look, emotional lighting, shallow depth of field, anamorphic lens flare" data-description="Estilo 3D ou realista de alto nivel. Iluminacao dramatica, camera lenta, enquadramentos artisticos e atmosfera emocional densa.">🎬 8. Narrativa Cinematografica (Cinematic Narrative)</option>
+                                        <option value="Cartoon Style Premium, high detail, vibrant colors, dynamic composition, expressive characters, clean lines, professional animation studio quality" data-description="Estilo de desenho animado com alta qualidade, cores vibrantes e composicao dinamica. Ideal para narrativas leves e expressivas.">🌟 Cartoon Style Premium</option>
+                                    </optgroup>
+                                    <optgroup label="Tendencias 2025">
+                                        <option value="Spiritual Neo-Realism style, mixing nature, soft light, and spiritual elements" data-description="Mistura entre natureza, luz suave e elementos espirituais. Cria atmosfera de reflexao existencial.">🌿 9. Neo-Realismo Espiritual</option>
+                                        <option value="Psychological Surrealism style, symbolic and dreamlike images representing the unconscious" data-description="Imagens simbolicas e oniricas que representam o inconsciente. Fusao de realidade e sonho.">🌀 10. Surrealismo Psicologico</option>
+                                        <option value="Memory Glitch style, fast transitions, flashes, and visual distortions" data-description="Transicoes rapidas, flashes e distorcoes visuais. Simula lembrancas quebradas, traumas e confusao mental.">🔦 11. Memoria Fragmentada</option>
+                                        <option value="Dark Stage style, dark background, spotlight on the character, intense voice, dramatic sfx" data-description="Fundo escuro, foco de luz no personagem, voz intensa e sfx dramaticos. Evoca confissao, solidao e segredos.">🎭 12. Teatro Sombrio</option>
+                                        <option value="Natural Drama style, scenes in real environments, natural lighting, soft tones" data-description="Cenas filmadas em ambientes reais, iluminacao natural e tons suaves. Passa autenticidade emocional e realismo poetico.">🌅 13. Drama Naturalista</option>
+                                        <option value="Retro VHS / Found Footage style, vintage aesthetic, old tape effects, grain" data-description="Estetica vintage, efeitos de fita antiga e granulacao. Evoca lembranca, perda e tempo passado.">📺 14. Estilo VHS Nostalgico</option>
+                                        <option value="Spiritual Minimalism style, few visual elements, long shots, silence, nature sounds" data-description="Poucos elementos visuais, planos longos, silencio e sons da natureza. Evoca contemplacao e cura emocional.">🧘 15. Narrativa Espiritual Minimalista</option>
+                                        <option value="Non-Linear Narrative style, story told out of order, multiple perspectives" data-description="Historia contada fora de ordem, com multiplas perspectivas. Ideal para misterio e dramas com revelacoes progressivas.">🧩 16. Narrativa Fragmentada</option>
+                                        <option value="Dream Realism style, ethereal visuals, diffuse light, camera float" data-description="Visual etereo, luz difusa e flutuacao de camera. Passa sensacao de sonho lucido e transcendencia.">🔮 17. Estilo Sonho-Real</option>
+                                        <option value="Reflective Monologue style, total focus on the narrator, fixed camera, introspective tone" data-description="Foco total no narrador, camera fixa, tom introspectivo. Excelente para videos com roteiros filosoficos.">🪞 18. Monologo Reflexivo</option>
+                                    </optgroup>
+                                </select>
+                                <p id="scene-style-description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 h-10"></p>
+                            </div>
+                        </div>
+                        <div id="manual-options" style="display: none;" class="flex items-center gap-2">
+                            <label class="text-sm">Gerar a cada</label>
+                            <input type="number" value="100" id="scene-word-count" class="mt-1 w-20 text-center px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            <label class="text-sm">palavras.</label>
+                            <span id="scene-prompts-count-display" class="text-sm font-medium text-gray-500 dark:text-gray-400 ml-2"></span>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="scene-characters" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Personagens Consistentes (Opcional)</label>
+                        <textarea id="scene-characters" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Ex: Joao, um homem de 40 anos, cabelo grisalho, oculos. Maria, uma jovem de 25, cabelo longo e ruivo."></textarea>
+                        <button id="detect-characters-btn" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-indigo-100 text-indigo-800 hover:bg-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40 mt-2">Detectar Personagens (IA)</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="scene-image-model" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Otimizar Prompt Para</label>
+                            <select id="scene-image-model" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="Midjourney" selected>Midjourney</option>
+                                <option value="DALL-E 3">DALL-E 3</option>
+                                <option value="Stable Diffusion 3">Stable Diffusion 3</option>
+                                <option value="Leonardo.AI">Leonardo.AI</option>
+                                <option value="Ideogram">Ideogram</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="scene-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma do Texto na Imagem</label>
+                            <select id="scene-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <input type="checkbox" id="scene-include-text" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500">
+                      <label for="scene-include-text" class="ml-2 text-sm text-gray-500 dark:text-gray-400">Incluir texto na imagem</label>
+                    </div>
+                     <div>
+                        <label for="scene-prompts-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="scene-prompts-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        </select>
+                    </div>
+                    <button id="generate-scene-prompts" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Prompts de Cena</button>
+                </div>
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+                <div id="scene-pagination-controls" class="mt-4"></div>
+                <div id="scene-history-container" class="mt-8"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="thumbnail-prompts-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Prompts de Thumbnail</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gere prompts otimizados para IAs de imagem.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <label for="thumb-title" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Titulo do Video</label>
+                    <input type="text" id="thumb-title" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Titulo do Video">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="thumb-platform" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Plataforma de Imagem</label>
+                            <select id="thumb-platform" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="Midjourney">Midjourney</option>
+                                <option value="Leonardo.AI">Leonardo.AI</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="thumb-lang" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Idioma do Texto na Imagem</label>
+                            <select id="thumb-lang" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <input type="checkbox" id="thumb-include-text" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500">
+                      <label for="thumb-include-text" class="ml-2 text-sm text-gray-500 dark:text-gray-400">Incluir frase na imagem</label>
+                    </div>
+                     <div>
+                        <label for="thumbnail-prompts-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="thumbnail-prompts-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        </select>
+                    </div>
+                    <button id="generate-prompts" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Prompts</button>
+                </div>
+                <div id="legend-container" class="mt-6"></div>
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+                <div id="thumb-actions" class="mt-4"></div>
+                <button id="generate-more-prompts" style="display:none;" class="w-full mt-4 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600">Gerar Mais</button>
+            </div>
+        </div>
+    </template>
+    
+    <template id="image-generator-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Gerador de Imagens</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Crie imagens incriveis usando o poder do ImageFX, controlando cada detalhe.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Prompt Principal</h3>
+                    <label for="imagefx-prompt" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1 sr-only">Descreva a imagem que voce quer gerar...</label>
+                    <textarea id="imagefx-prompt" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Descreva a imagem que voce quer gerar..."></textarea>
+                    <button id="import-last-image-prompt" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Importar Ultimo Prompt Gerado</button>
+                    <div>
+                        <label for="imagefx-batch-file" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Ou carregar prompts em lote (.txt)</label>
+                        <input type="file" id="imagefx-batch-file" accept=".txt" class="mt-1 block w-full text-sm text-gray-500 dark:text-gray-400
+                            file:mr-4 file:py-2 file:px-4
+                            file:rounded-md file:border-0
+                            file:text-sm file:font-semibold
+                            file:bg-blue-50 file:text-blue-700
+                            hover:file:bg-blue-100
+                            dark:file:bg-blue-900/20 dark:file:text-blue-300 dark:hover:file:bg-blue-900/40"/>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Cada linha do arquivo TXT sera um prompt diferente.</p>
+                    </div>
+
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4">Opcoes Avancadas</h3>
+                    <label for="imagefx-negative-prompt" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1 sr-only">Elementos que voce NAO quer na imagem</label>
+                    <textarea id="imagefx-negative-prompt" class="mt-1 w-full h-20 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Elementos que voce NAO quer na imagem (ex: texto, desfocado, feio)..."></textarea>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="imagefx-aspect-ratio" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Proporcao</label>
+                            <select id="imagefx-aspect-ratio" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="16:9">Paisagem (16:9)</option>
+                                <option value="9:16">Retrato (9:16)</option>
+                                <option value="1:1">Quadrado (1:1)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="imagefx-style" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Estilo do Prompt</label>
+                            <select id="imagefx-style" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="none">Nenhum (Padrao)</option>
+                                <optgroup label="Realismo">
+                                    <option value="hyperrealistic">Hiper-realista</option>
+                                    <option value="photorealistic, 8k">Fotografia de alta definicao (8K)</option>
+                                    <option value="cinematic, dramatic lighting">Estilo cinematico (luz dramatica)</option>
+                                    <option value="sharp focus, high detail">Foco nitido, alto detalhe</option>
+                                </optgroup>
+                                <optgroup label="Fotografia">
+                                    <option value="long exposure">Longa Exposicao</option>
+                                    <option value="black and white photo">Preto e Branco</option>
+                                    <option value="macro photography">Fotografia Macro</option>
+                                </optgroup>
+                                <optgroup label="Arte Digital">
+                                    <option value="digital art">Arte Digital</option>
+                                    <option value="concept art">Arte Conceitual</option>
+                                    <option value="fantasy art">Arte de Fantasia</option>
+                                    <option value="sci-fi art">Arte Sci-Fi</option>
+                                    <option value="3D render">Render 3D</option>
+                                    <option value="pixel art">Pixel Art</option>
+                                </optgroup>
+                                <optgroup label="Estilos Artisticos">
+                                    <option value="anime style">Anime</option>
+                                    <option value="comic book style">Banda Desenhada (Comics)</option>
+                                    <option value="watercolor painting">Aquarela</option>
+                                    <option value="oil painting">Pintura a Oleo</option>
+                                    <option value="surrealism">Surrealismo</option>
+                                    <option value="minimalist">Minimalista</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="imagefx-num-images" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Nº de Imagens</label>
+                            <input type="number" id="imagefx-num-images" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" value="1" min="1" max="4">
+                        </div>
+                        <div>
+                            <label for="imagefx-model" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Qualidade da Imagem</label>
+                            <select id="imagefx-model" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="IMAGEN_3">Rapida</option>
+                                <option value="IMAGEN_3_1" selected>Equilibrada</option>
+                                <option value="IMAGEN_3_5">Maxima Qualidade</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button id="generate-imagefx" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Imagem(ns)</button>
+                </div>
+                <div id="legend-container" class="mt-6"></div>
+                <div id="output" class="mt-6 space-y-4"></div>
+                <div id="imagefx-actions" class="mt-4 space-y-2" style="display:none;">
+                    <div class="flex gap-2">
+                        <button id="select-all-images-btn" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">
+                            Selecionar Tudo
+                        </button>
+                        <button id="download-selected-images-btn" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-blue-900/40">
+                            Baixar Selecionadas
+                        </button>
+                    </div>
+                    <button id="regenerate-all-failed-btn" style="display: none;" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-orange-900/20 dark:text-orange-300 dark:hover:bg-orange-900/40">
+                        Gerar Novamente Todas com Erro
+                    </button>
+                    <button id="clear-all-images-btn" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40">
+                        Limpar Imagens Geradas
+                    </button>
+                    <button id="restore-last-images-btn" style="display: none;" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-yellow-100 text-yellow-800 hover:bg-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:hover:bg-yellow-900/40">
+                        Restaurar Ultimas Imagens
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <template id="voice-generator-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Gerador de Voz</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Transforme roteiros em narracoes de alta qualidade para qualquer duracao.</p>
+            <div class="max-w-4xl mx-auto space-y-6">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-6">
+                    <div>
+                        <label for="tts-script-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro Completo</label>
+                        <textarea id="tts-script-input" class="mt-1 w-full h-60 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole ou importe o roteiro completo aqui..."></textarea>
+                        <div class="flex justify-between items-center mt-2">
+                            <button id="tts-import-last-script" class="text-sm font-medium text-blue-600 dark:text-blue-500 hover:underline">Importar ultimo roteiro gerado</button>
+                            <p id="tts-duration-hint" class="text-sm text-gray-500 dark:text-gray-400">Adicione o roteiro para calcular a duracao.</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="tts-voice-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Voz da Narracao</label>
+                            <div class="flex items-center gap-2 mt-1">
+                                <select id="tts-voice-select" class="w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                    <option value="">A carregar vozes...</option>
+                                </select>
+                                <button id="tts-preview-btn" type="button" class="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 dark:text-gray-400" title="Testar Voz">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" /></svg>
+                                </button>
+                            </div>
+                            <audio id="tts-preview-player" class="w-full mt-2" style="display: none;" controls></audio>
+                        </div>
+                        <div>
+                            <label for="tts-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA (Qualidade)</label>
+                            <select id="tts-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                                <option value="gemini-2.5-pro-preview-tts" selected>Pro (Maxima Qualidade)</option>
+                                <option value="gemini-2.5-flash-preview-tts">Flash (Rapida e Economica)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="tts-style-preset" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Estilo de Narracao (Predefinicoes)</label>
+                            <select id="tts-style-preset" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                        </div>
+                        <div>
+                            <label for="tts-style-instructions" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Instrucoes de Estilo (Personalizado)</label>
+                            <textarea id="tts-style-instructions" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Selecione um estilo ou escreva suas proprias instrucoes..."></textarea>
+                        </div>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button id="tts-generate-btn" class="w-full sm:w-auto flex-1 justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Narracao</button>
+                        <button id="tts-reset-btn" class="w-full sm:w-auto flex-1 justify-center py-3 px-4 rounded-lg font-semibold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">Limpar Tudo</button>
+                    </div>
+                </div>
+                <div id="output"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="editors-cut-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Guia de Edicao</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Crie uma linha do tempo de edicao combinando seu roteiro e prompts de cena.</p>
+            <div class="max-w-3xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div>
+                        <label for="editors-cut-script-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro Completo</label>
+                        <textarea id="editors-cut-script-input" class="mt-1 w-full h-40 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o roteiro completo aqui..."></textarea>
+                    </div>
+                    <div>
+                        <label for="editors-cut-prompts-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Prompts de Cena (um por linha)</label>
+                        <textarea id="editors-cut-prompts-input" class="mt-1 w-full h-40 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole os prompts de cena gerados, um por linha..."></textarea>
+                    </div>
+                    <button id="import-last-results-btn" type="button" class="w-full text-center py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Importar Ultimo Roteiro e Prompts</button>
+                    <div>
+                        <label for="editors-cut-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="editors-cut-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                    </div>
+                    <button id="generate-editors-cut" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Gerar Guia de Edicao</button>
+                </div>
+                <div id="output" class="mt-6 allow-copy"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="srt-converter-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Conversor de SRT (Estilo CapCut)</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Converta texto para o formato de legenda .SRT, otimizado para edicao rapida.</p>
+            <div class="max-w-3xl mx-auto">
+                <form id="conversorForm" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div>
+                        <label for="textoInput" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Cole o roteiro completo aqui</label>
+                        <textarea id="textoInput" class="mt-1 w-full h-60 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o texto completo aqui..."></textarea>
+                    </div>
+                    <button type="submit" id="convert-srt-button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Converter para SRT</button>
+                </form>
+                <div id="srt-output-container" class="mt-6">
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h4 class="font-semibold text-gray-900 dark:text-gray-100">Resultado SRT</h4>
+                            <div class="flex gap-2">
+                                <button id="downloadBtn" class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700" style="display:none;">Transferir</button>
+                                <button type="button" id="limparBtn" class="text-xs bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-3 py-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600" style="display:none;">Limpar</button>
+                            </div>
+                        </div>
+                        <pre id="resultado" class="whitespace-pre-wrap text-sm bg-gray-100 dark:bg-gray-700 p-2 rounded border border-gray-200 dark:border-gray-600 max-h-72 overflow-y-auto"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <template id="text-divider-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Divisor de Texto</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Analise seu roteiro e divida-o em partes menores para facilitar a narração.</p>
+            
+            <div class="max-w-4xl mx-auto space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center">
+                        <h3 class="text-lg font-medium text-gray-500 dark:text-gray-400 mb-1">Palavras</h3>
+                        <p id="word-count" class="text-4xl font-bold text-gray-900 dark:text-gray-100">0</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center">
+                        <h3 class="text-lg font-medium text-gray-500 dark:text-gray-400 mb-1">Caracteres</h3>
+                        <p id="char-count" class="text-4xl font-bold text-gray-900 dark:text-gray-100">0</p>
+                    </div>
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center">
+                        <h3 class="text-lg font-medium text-gray-500 dark:text-gray-400 mb-1">Tempo de Narração</h3>
+                        <p id="time-estimate" class="text-4xl font-bold text-gray-900 dark:text-gray-100">00:00</p>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <label for="text-divider-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Roteiro Completo</label>
+                    <textarea id="text-divider-input" class="mt-1 w-full h-60 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole o roteiro completo aqui..."></textarea>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 flex flex-col sm:flex-row items-center gap-4">
+                    <div class="flex items-center gap-2">
+                        <label for="split-chunk-size" class="text-sm font-medium text-gray-500 dark:text-gray-400">Dividir a cada</label>
+                        <input type="number" id="split-chunk-size" value="150" class="w-24 text-center px-4 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        <select id="split-chunk-type" class="px-4 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                            <option value="word">palavras</option>
+                            <option value="char">caracteres</option>
+                        </select>
+                    </div>
+                    <button id="split-text-btn" class="w-full sm:w-auto flex-1 justify-center py-2 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Dividir Texto</button>
+                </div>
+
+                <div id="output" class="mt-6 space-y-4 allow-copy"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="video-optimizer-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Otimizador de Video</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Analise um video do YouTube e receba sugestoes da IA para otimizar o titulo, descricao e tags.</p>
+            <div class="max-w-4xl mx-auto">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-4">
+                    <div>
+                        <label for="video-url-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">URL do Video do YouTube</label>
+                        <input type="url" id="video-url-input" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole a URL do video aqui...">
+                    </div>
+                    <div>
+                        <label for="video-optimizer-model-select" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Modelo de IA</label>
+                        <select id="video-optimizer-model-select" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"></select>
+                    </div>
+                    <button id="analyze-video-btn" type="button" class="w-full justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Analisar Video</button>
+                </div>
+                <div id="output" class="mt-6 space-y-6">
+                    <!-- Video details and current score will be rendered here -->
+                    <div id="video-details-container" style="display: none;"></div>
+                    <!-- AI suggestions and new score will be rendered here -->
+                    <div id="ai-suggestions-container" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="settings-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Configuracoes</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gerencie suas chaves de API para habilitar as ferramentas da plataforma.</p>
+            <div class="max-w-3xl mx-auto space-y-6">
+                <div id="settings-card" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-6">
+                    <h3 class="text-lg font-semibold">Chaves de API de Texto (Obrigatorio)</h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">As chaves sao salvas, mas os navegadores podem nao exibi-las por seguranca. Clique no <svg class="inline-block w-4 h-4 align-text-bottom" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg> para revelar.</p>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Claude AI API Key (Preferencial) <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline text-xs">(obter)</a></label>
+                            <div class="relative">
+                                <input type="password" id="claude-key" class="mt-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white pr-10">
+                                <button type="button" class="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 toggle-password-visibility" data-target="claude-key">
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <hr class="border-gray-200 dark:border-gray-700"/>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Gemini API Key <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline text-xs">(obter)</a></label>
+                            <div class="relative">
+                                <input type="password" id="gemini-key-1" class="mt-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white pr-10">
+                                <button type="button" class="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 toggle-password-visibility" data-target="gemini-key-1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">OpenAI (GPT) API Key <a href="https://platform.openai.com/api-keys" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline text-xs">(obter)</a></label>
+                            <div class="relative">
+                                <input type="password" id="gpt-key" class="mt-1 w-full px-3 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white pr-10">
+                                <button type="button" class="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 toggle-password-visibility" data-target="gpt-key">
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <hr class="border-gray-200 dark:border-gray-700"/>
+                    <h3 class="text-lg font-semibold">Configuracoes de Midia (Opcional)</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="imagefx-cookies-setting" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">ImageFX Cookies (JSON)</label>
+                            <textarea id="imagefx-cookies-setting" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole aqui o texto JSON exportado pela extensao 'Cookie Editor'..."></textarea>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <button id="save-settings" class="flex-1 justify-center py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Salvar Configuracoes</button>
+                        <button id="validate-api-keys" class="flex-1 justify-center py-3 px-4 rounded-lg font-semibold bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">Validar APIs</button>
+                    </div>
+                    <div id="settings-feedback" class="mt-2 text-sm"></div>
+                </div>
+                <div class="mt-6 space-y-4">
+                    <details class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                        <summary class="font-semibold cursor-pointer text-blue-800 dark:text-blue-300 list-none flex justify-between items-center">
+                            💡 Resolvendo Erro de Cota (Faturamento JA ATIVO)?
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-blue-700 dark:text-blue-300 space-y-2 prose prose-sm max-w-none">
+                            <p>Se o faturamento ja esta ativo mas o erro de cota persiste, o problema e que sua chave de API nao esta ligada ao projeto correto. Vamos resolver isso:</p>
+                            <ol class="list-decimal pl-5 space-y-2">
+                                <li><strong>Identifique o Projeto Correto:</strong> Va para o <a href="https://console.cloud.google.com/billing" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Google Cloud Billing</a> e veja qual <strong>Nome do Projeto</strong> esta associado a sua conta de faturamento ativa. Anote esse nome.</li>
+                                <li><strong>Crie uma Nova Chave de API (no lugar certo):</strong>
+                                    <ul class="list-disc pl-5">
+                                        <li>Acesse a pagina de <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Credenciais da API</a>.</li>
+                                        <li>No topo da pagina, clique no seletor de projetos (geralmente ao lado do logo "Google Cloud") e <strong>selecione o projeto que voce anotou no passo 1</strong>.</li>
+                                        <li>Clique em <strong>"+ CRIAR CREDENCIAIS"</strong> e depois em <strong>"Chave de API"</strong>.</li>
+                                        <li>Uma nova chave sera criada. <strong>Copie esta nova chave.</strong></li>
+                                        </ul>
+                                </li>
+                                <li><strong>Atualize na DARKSCRIPT AI:</strong> Cole esta <strong>nova chave</strong> em um dos campos "Gemini API Key" acima e clique em "Salvar Configuracoes".</li>
+                            </ol>
+                            <p class="font-semibold">Isso garante que a chave que voce esta usando pertence ao projeto com o faturamento ativo, resolvendo o erro de cota.</p>
+                        </div>
+                    </details>
+                    <details class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                        <summary class="font-semibold cursor-pointer text-yellow-800 dark:text-yellow-300 list-none flex justify-between items-center">
+                            ⚠️ Resolvendo Erro de Cota Excedida (429)? (Tutorial Importante)
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-yellow-700 dark:text-yellow-300 space-y-2 prose prose-sm max-w-none">
+                            <p>Se voce esta a receber um erro "429 Too Many Requests" ou "Quota Exceeded", significa que a sua chave de API do Google Gemini tem um limite de 0 pedidos diarios. Isso geralmente acontece porque o faturamento nao esta ativado no seu projeto do Google Cloud.</p>
+                            <p><strong>Para resolver, siga estes passos:</strong></p>
+                            <ol class="list-decimal pl-5 space-y-1">
+                                <li>Aceda a pagina de <a href="https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Faturamento do Google Cloud</a>.</li>
+                                <li>Selecione o projeto do Google Cloud associado a sua chave de API Gemini.</li>
+                                <li>Se o projeto nao tiver uma conta de faturamento vinculada, voce vera uma opcao para <strong>"Vincular uma conta de faturamento"</strong> ou <strong>"Criar conta de faturamento"</strong>. Siga as instrucoes.</li>
+                                <li>Pode ser necessario adicionar um cartao de credito, mas o Google oferece um nivel de utilizacao gratuito generoso. Ativar o faturamento e um passo necessario para remover o limite de 0 pedidos, mesmo que o seu uso permaneca gratuito.</li>
+                                <li>Apos ativar o faturamento, aguarde alguns minutos e tente usar a ferramenta novamente.</li>
+                            </ol>
+                            <p class="font-semibold">Isto nao e um erro da DARKSCRIPT AI, mas sim uma configuracao necessaria na sua conta do Google Cloud para usar as APIs.</p>
+                        </div>
+                    </details>
+                     <details class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                        <summary class="font-semibold cursor-pointer text-gray-900 dark:text-gray-100 list-none flex justify-between items-center">
+                            Como obter uma API Key do Gemini? (Tutorial Rapido)
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 prose prose-sm max-w-none">
+                            <ol class="list-decimal pl-5 space-y-1">
+                                <li>Acesse o <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Google AI Studio</a> e faca login com sua conta Google.</li>
+                                <li>No menu a esquerda, clique em <strong>"Get API key"</strong>.</li>
+                                <li>Clique no botao <strong>"Create API key in new project"</strong>.</li>
+                                <li>Aguarde um instante e sua chave sera gerada. Copie a chave.</li>
+                                <li>Cole a chave no campo "Gemini API Key" acima e salve as configuracoes.</li>
+                            </ol>
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                        <summary class="font-semibold cursor-pointer text-gray-900 dark:text-gray-100 list-none flex justify-between items-center">
+                            Como obter uma API Key do YouTube Data v3? (Tutorial Rapido)
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 prose prose-sm max-w-none">
+                            <p>Esta chave e necessaria para a ferramenta "Otimizador de Video".</p>
+                            <ol class="list-decimal pl-5 space-y-1">
+                                <li>Acesse o <a href="https://console.cloud.google.com/" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Google Cloud Console</a>.</li>
+                                <li>No topo da pagina, clique no seletor de projetos e crie um <strong>novo projeto</strong> (ex: "CerebroAI-YouTube").</li>
+                                <li>No menu de busca, procure por "YouTube Data API v3" e clique no resultado.</li>
+                                <li>Na pagina da API, clique no botao azul <strong>"ATIVAR"</strong>.</li>
+                                <li>Apos ativar, voce sera redirecionado. No menu a esquerda, va para <strong>"Credenciais"</strong>.</li>
+                                <li>Clique em <strong>"+ CRIAR CREDENCIAIS"</strong> e selecione <strong>"Chave de API"</strong>.</li>
+                                <li>Sua chave sera criada. Copie-a e cole no campo "Gemini API Key" acima, pois a mesma chave pode ser usada para ambas as APIs.</li>
+                            </ol>
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                        <summary class="font-semibold cursor-pointer text-gray-900 dark:text-gray-100 list-none flex justify-between items-center">
+                            Como ativar o Gerador de Voz? (Tutorial Rapido)
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 prose prose-sm max-w-none">
+                            <p>Para o Gerador de Voz funcionar, a sua chave de API Gemini precisa de ter a "Generative Language API" ativada no seu projeto Google Cloud.</p>
+                            <ol class="list-decimal pl-5 space-y-1">
+                                <li>Aceda a <a href="https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">Biblioteca de APIs do Google Cloud</a>.</li>
+                                <li>No topo da pagina, selecione o projeto Google Cloud associado a sua chave de API.</li>
+                                <li>Se a API estiver desativada, vera um botao azul a dizer <strong>"ATIVAR"</strong> (ou "ENABLE"). Clique nele.</li>
+                                <li>Aguarde alguns instantes. Depois de ativada, a lista de vozes devera carregar corretamente na ferramenta.</li>
+                            </ol>
+                        </div>
+                    </details>
+                    <details class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 imagefx-cookies-tutorial">
+                        <summary class="font-semibold cursor-pointer text-gray-900 dark:text-gray-100 list-none flex justify-between items-center">
+                            Como obter os Cookies do ImageFX? (Tutorial Rapido)
+                            <svg class="w-5 h-5 transition-transform transform details-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                        </summary>
+                        <div class="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 prose prose-sm max-w-none">
+                            <ol class="list-decimal pl-5 space-y-1">
+                                <li>Instale a extensao <a href="https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">"Cookie Editor"</a> no seu navegador (Chrome, Edge, Firefox).</li>
+                                <li>Acesse o site do <a href="https://labs.google/fx/tools/image-fx" target="_blank" class="text-blue-600 dark:text-blue-500 hover:underline font-medium">ImageFX</a> e faca login com sua conta Google.</li>
+                                <li>Clique no icone da extensao "Cookie Editor" na barra do seu navegador.</li>
+                                <li>No canto inferior direito da janela da extensao, clique no botao <strong>"Export"</strong>.</li>
+                                <li>Selecione <strong>"Export as JSON"</strong>. O texto dos cookies sera copiado para sua area de transferencia.</li>
+                                <li>Cole o texto completo no campo "ImageFX Cookies (JSON)" acima e salve as configuracoes.</li>
+                            </ol>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </template>
+    
+    <template id="admin-template">
+        <div class="fade-in">
+            <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">Painel Administrativo</h2>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">Gerir utilizadores e configuracoes da aplicacao.</p>
+            <div id="admin-container" class="space-y-6">
+            </div>
+            <div id="batch-tag-container" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mt-6" style="display: none;">
+                <h3 class="text-lg font-semibold mb-2">Acoes em Lote (<span id="selected-user-count">0</span> selecionados)</h3>
+                <div class="flex items-center gap-2">
+                    <input type="text" id="batch-tags-input" class="mt-1 flex-1 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Tags, separadas por virgula">
+                    <button id="add-tags-batch-btn" class="py-2 px-4 rounded-lg font-semibold bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40">Adicionar</button>
+                    <button id="remove-tags-batch-btn" class="py-2 px-4 rounded-lg font-semibold bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40">Remover</button>
+                </div>
+            </div>
+            <div id="admin-academy-container" class="mt-6"></div>
+        </div>
+    </template>
+
+    <template id="faq-template">
+    <div class="fade-in">
+        <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">FAQ - Perguntas Frequentes</h2>
+        <p class="text-gray-600 dark:text-gray-400 mb-6">Tudo o que voce precisa saber para extrair o maximo da DARKSCRIPT AI.</p>
+        <div class="max-w-3xl mx-auto space-y-4">
+            
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">O que e a DARKSCRIPT AI?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">A DARKSCRIPT AI e uma suite de ferramentas projetada para criadores de conteudo, focada em otimizar e acelerar o processo de criacao de videos, desde a concepcao do roteiro ate a geracao de midias e legendas.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Como funciona o Criador de Roteiro?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Esta e a ferramenta principal. Voce insere informacoes sobre seu canal (nicho, publico), o tema do video e escolhe uma "Formula de Estrutura". Temos dezenas de formulas testadas para nichos especificos (de terror a canais cristaos) para maximizar o impacto. A IA entao gera um roteiro completo, otimizado para retencao e viralizacao, seguindo a estrutura que voce escolheu.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Para que servem os Titulos Virais?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Esta ferramenta ajuda a criar titulos com alto poder de clique (CTR). Voce pode gerar "Titulos Prontos", que vem com uma pontuacao de potencial, ou "Estruturas de Titulos", que sao modelos para voce adaptar. Basta inserir o tema central do seu video.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Como usar o Tradutor de Roteiros?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Cole um roteiro completo no campo de texto, selecione um ou mais idiomas para os quais deseja traduzir e clique no botao. A ferramenta gerara uma traducao de alta qualidade para cada idioma selecionado, permitindo expandir o alcance do seu conteudo.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">O que sao os Prompts para Cenas?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Esta ferramenta le o seu roteiro e o divide em cenas visuais. Para cada cena, ela gera um prompt de texto detalhado e otimizado para IAs de imagem como Midjourney ou Leonardo.AI. Voce pode controlar se as cenas sao geradas automaticamente ou a cada X palavras.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Como funcionam os Prompts de Thumbnail?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Basta inserir o titulo do seu video e a ferramenta criara prompts de imagem especificos para gerar uma thumbnail impactante e com alta taxa de cliques. Ela tambem fornece uma pontuacao de CTR para cada prompt gerado.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Como usar o Gerador de Imagens?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Esta ferramenta permite gerar imagens diretamente na plataforma usando o poder do ImageFX. Para ativa-la, voce precisa de extrair os cookies da sua sessao ativa no ImageFX e cola-los no campo de "Configuracoes" da aplicacao.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">O que faz o Conversor de SRT?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Ele transforma um texto longo (como a narracao de um roteiro) em um arquivo de legenda no formato .SRT. A ferramenta calcula automaticamente os tempos e divide o texto em blocos legiveis, prontos para serem usados em editores de video ou no YouTube.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Para que serve o Divisor de Texto?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">E uma ferramenta de produtividade para narracao. Cole seu roteiro e a ferramenta o dividira em pedacos menores, com base em um limite de palavras ou caracteres que voce define. Isso facilita a gravacao da narracao em partes, evitando erros e cansaco.</p>
+            </div>
+
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Preciso configurar algo na pagina de Configuracoes?</h3>
+                <p class="mt-2 text-gray-600 dark:text-gray-300">Sim, e fundamental. Para que as ferramentas de IA (roteiros, prompts, titulos, etc.) funcionem, voce precisa inserir suas proprias chaves de API do Claude e/ou do Gemini. Para o Gerador de Imagens, voce precisa inserir seus cookies do ImageFX.</p>
+            </div>
+            
+        </div>
+    </div>
+</template>
+
+<template id="academy-template">
+    <div class="fade-in">
+        <h2 class="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-1">DarkScript Academy</h2>
+        <p class="text-gray-600 dark:text-gray-400 mb-6">Aulas e tutoriais para acelerar seus resultados.</p>
+        <div id="academy-lessons-container" class="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- As aulas serão renderizadas aqui pelo app.js -->
+        </div>
+    </div>
+</template>
+
+    <div id="welcome-video-modal" style="display: none;" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[10007] flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-xl w-full max-w-3xl relative">
+            <button id="close-welcome-video-modal-btn" class="absolute top-2 right-2 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 text-2xl z-20">&times;</button>
+            <div class="relative w-full" style="padding-top: 56.25%;">
+                <iframe id="welcome-video-iframe" class="absolute top-0 left-0 w-full h-full rounded-lg" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+            </div>
+            <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100 mt-4 mb-2">Bem-vindo à DarkScript Academy!</h3>
+            <p class="text-gray-600 dark:text-gray-300 text-sm">Assista a este vídeo para começar a aproveitar ao máximo a plataforma.</p>
+        </div>
+    </div>
+
+	<script src="formulas.js" defer></script>
+    <script src="voices.js" defer></script>
+ 
+    <script src="app.js" defer></script>
+
+</body>
+</html>

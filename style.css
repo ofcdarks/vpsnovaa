@@ -1,0 +1,301 @@
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: #f3f4f6;
+    color: #1f2937;
+    /* Base font size increased for elements directly inheriting from body */
+    font-size: 1.125rem; /* ~18px, a noticeable increase from default 16px */
+    line-height: 1.6; /* Improved readability for body text */
+}
+
+/* Overriding Tailwind's default font sizes to scale them up across the application. */
+/* This provides a significant increase in text size as requested, while trying to maintain
+   relative visual hierarchy and avoid extreme layout breaks. '!important' is used
+   to ensure these custom styles take precedence over Tailwind's utility classes. */
+.text-xs { font-size: 0.95rem !important; }    /* Original: 0.75rem (12px) -> New: ~15.2px */
+.text-sm { font-size: 1.05rem !important; }    /* Original: 0.875rem (14px) -> New: ~16.8px */
+.text-base { font-size: 1.2rem !important; }   /* Original: 1rem (16px) -> New: ~19.2px */
+.text-lg { font-size: 1.35rem !important; }    /* Original: 1.125rem (18px) -> New: ~21.6px */
+.text-xl { font-size: 1.5rem !important; }     /* Original: 1.25rem (20px) -> New: ~24px */
+.text-2xl { font-size: 1.75rem !important; }   /* Original: 1.5rem (24px) -> New: ~28px */
+.text-3xl { font-size: 2.1rem !important; }    /* Original: 1.875rem (30px) -> New: ~33.6px */
+.text-4xl { font-size: 2.5rem !important; }    /* Original: 2.25rem (36px) -> New: ~40px */
+
+/* Specific adjustment for the main title in auth-section to make it even more prominent */
+#auth-section .text-4xl {
+    font-size: 3rem !important; /* Make the main application title larger */
+}
+
+.font-premium { font-family: 'Poppins', sans-serif; }
+.allow-copy {
+    -webkit-user-select: text; /* Safari */
+    -moz-user-select: text; /* Firefox */
+    -ms-user-select: text; /* IE 10+ */
+    user-select: text; /* Standard syntax */
+}
+.no-copy {
+    -webkit-user-select: none; /* Safari */
+    -moz-user-select: none; /* Firefox */
+    -ms-user-select: none; /* IE 10+ */
+    user-select: none; /* Standard syntax */
+}
+.sidebar-btn {
+    transition: all 0.2s ease-in-out;
+    color: #4b5563;
+    font-size: 1.05rem !important; /* Ensure sidebar button text scales well */
+    padding-top: 0.6rem; /* Adjust padding for larger text */
+    padding-bottom: 0.6rem; /* Adjust padding for larger text */
+}
+.sidebar-btn:hover {
+    background-color: #e5e7eb;
+    color: #111827;
+}
+.sidebar-btn-active {
+    background-color: #3b82f6;
+    color: white;
+    font-weight: 600;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+}
+.sidebar-divider {
+    padding: 10px 16px 4px; /* Adjusted padding for larger font */
+    font-size: 0.95rem !important; /* Ensure divider text scales well */
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.fade-in { animation: fadeIn 0.5s ease-in-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.auth-container {
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+}
+.form-input {
+    background-color: #f9fafb;
+    border: 1px solid #d1d5db;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    padding-top: 0.8rem; /* Adjusted padding for larger font */
+    padding-bottom: 0.8rem; /* Adjusted padding for larger font */
+    font-size: 1.05rem !important; /* Explicitly set font size for inputs for consistency */
+}
+.form-input:focus, .form-input:focus-visible {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+}
+.primary-btn {
+    background-color: #3b82f6;
+    color: white;
+    transition: background-color 0.2s;
+    padding-top: 0.9rem; /* Adjusted padding for larger font */
+    padding-bottom: 0.9rem; /* Adjusted padding for larger font */
+    font-size: 1.15rem !important; /* Explicitly set font size for primary buttons */
+}
+.primary-btn:hover {
+    background-color: #2563eb;
+}
+.secondary-link { color: #3b82f6; }
+.secondary-link:hover { text-decoration: underline; }
+.card {
+     background-color: #ffffff;
+     border: 1px solid #e5e7eb;
+     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+     border-radius: 0.75rem; /* Slightly increased border-radius for aesthetics with larger elements */
+}
+
+.copy-btn.copied, .prompt-copy-btn.copied { background-color: #10b981 !important; color: white !important; }
+.prompt-card.copied {
+    background-color: #e6fef2;
+    border-left-color: #10b981;
+}
+#log-bar {
+    background-color: #dbeafe; /* bg-blue-100 */
+    color: #1e40af; /* text-blue-800 */
+    transition: background-color 0.3s, color 0.3s;
+}
+
+/* *** CORRECAO DO POPUP: Estilos adicionados para garantir alinhamento e espacamento *** */
+#progress-modal > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+#progress-task-message {
+    min-height: 2.25rem;
+}
+#progress-motivational-phrase {
+    min-height: 2.5rem;
+}
+#progress-part-counter {
+    min-height: 1.25rem;
+}
+
+/* Premium Progress Modal */
+#progress-circle-container {
+    width: 160px; /* Increased from w-32 (128px) for larger text */
+    height: 160px; /* Increased from h-32 (128px) for larger text */
+    margin-bottom: 1.5rem; /* Adjust spacing with potentially larger text */
+}
+#progress-circle-bg { stroke: #e5e7eb; }
+#progress-circle {
+    stroke: #3b82f6;
+    transition: stroke-dashoffset 0.5s ease-out;
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+}
+#progress-percentage {
+    font-size: 2.2rem !important; /* Adjusted to fit well within the new circle size */
+    line-height: 1.2; /* Better line height for percentage text */
+}
+@keyframes pulse-wait {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+.pulsing-wait {
+    animation: pulse-wait 2s ease-in-out infinite;
+}
+#progress-task-message, #progress-motivational-phrase {
+    line-height: 1.5 !important; /* Ensure good line spacing for longer messages */
+}
+
+
+/* Success Toast */
+#success-toast {
+    position: fixed;
+    bottom: -100px;
+    left: 50%;
+    transform: translateX(-50%);
+    transition: bottom 0.5s ease-in-out;
+    z-index: 10000;
+}
+#success-toast.show {
+    bottom: 20px;
+}
+
+
+/* Toggle Switch */
+.switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: #2563eb; }
+input:focus + .slider { box-shadow: 0 0 1px #2563eb; }
+input:checked + .slider:before { transform: translateX(26px); }
+
+/* Draggable Sidebar Items */
+.sidebar-draggable-item {
+    cursor: grab;
+}
+.sidebar-draggable-item.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+}
+.sidebar-draggable-item.over {
+    border-top: 2px solid #3b82f6;
+    margin-top: -2px; /* Adjust to not increase element height */
+}
+.sidebar-draggable-item.over.bottom {
+    border-top: none;
+    border-bottom: 2px solid #3b82f6;
+    margin-top: 0;
+    margin-bottom: -2px; /* Adjust to not increase element height */
+}
+
+/* CORRECAO 4: Ocultar as setas de inputs do tipo number */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+/* Efeito Ken Burns para Imagens */
+.ken-burns-container {
+    overflow: hidden;
+    position: relative;
+}
+.ken-burns-container img.ken-burns-effect {
+    animation: kenburns-animation 20s ease-in-out infinite alternate;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+@keyframes kenburns-animation {
+    0% {
+        transform: scale(1) translate(0, 0);
+    }
+    100% {
+        transform: scale(1.15) translate(5%, -5%);
+    }
+}
+
+@media (max-width: 768px) {
+    #app-container { flex-direction: column; }
+    #sidebar {
+        position: fixed; left: -100%; top: 0; height: 100%; z-index: 40;
+        transition: left 0.3s ease-in-out; width: 288px;
+    }
+    #sidebar.open { left: 0; }
+    #main-content { margin-left: 0; }
+}
+
+/* Adicionado para garantir que os modais fiquem na frente de todos os outros elementos */
+#force-password-change-modal {
+    z-index: 10002 !important;
+}
+
+#confirmation-modal {
+    z-index: 10003 !important;
+}
+
+#image-lightbox-modal.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Dark mode styles for select dropdowns for better readability */
+.dark select optgroup {
+    color: #d1d5db; /* gray-300 */
+    font-weight: 600;
+    background-color: #1f2937; /* gray-800 */
+}
+
+.dark select option {
+    color: #f9fafb; /* gray-50 */
+    background-color: #374151; /* gray-700 */
+    padding: 4px 8px; /* Add some padding for better spacing */
+}
+
+.dark select option:checked {
+    background-color: #2563eb; /* blue-600 */
+    color: white;
+}
+
+.action-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    transition: background-color 0.2s;
+    background-color: #e5e7eb; /* bg-gray-200 */
+    color: #1f2937; /* text-gray-800 */
+}
+.dark .action-btn {
+    background-color: #374151; /* dark:bg-gray-700 */
+    color: #f9fafb; /* dark:text-gray-50 */
+}
+.action-btn:hover {
+    background-color: #d1d5db; /* hover:bg-gray-300 */
+}
+.dark .action-btn:hover {
+    background-color: #4b5563; /* dark:hover:bg-gray-600 */
+}
+
+/* Added for long error messages in image generator */
+.overflow-wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word; /* For older browsers */
+}

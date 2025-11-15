@@ -1,0 +1,60 @@
+# Node modules (será instalado no container)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Arquivos de ambiente locais
+.env
+.env.local
+.env.*.local
+
+# Arquivos de desenvolvimento
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Arquivos de teste
+test
+tests
+*.test.js
+*.spec.js
+
+# Documentação
+README.md
+*.md
+
+# Arquivos temporários e cache
+temp_audio/*
+!temp_audio/.gitkeep
+public/final_audio/*
+!public/final_audio/.gitkeep
+public/uploads/*
+!public/uploads/.gitkeep
+*.log
+.DS_Store
+Thumbs.db
+
+# Arquivos de backup e antigos
+*.old
+*.bak
+*OLD.html
+*1.js
+*1.json
+
+# Scripts de teste
+test-*.ps1
+test-*.js
+
+# Banco de dados local (será criado no container se necessário)
+*.db
+*.sqlite
+*.sqlite3
+
+# Arquivos do sistema
+.vscode
+.idea
+
