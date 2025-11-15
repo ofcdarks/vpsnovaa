@@ -96,12 +96,15 @@ app.use(
         mediaSrc: ["'self'", "data:", "blob:"],
         connectSrc: [
           "'self'",
+          "http://*",
+          "https://*",
           "https://www.youtube.com",
           "https://i.ytimg.com",
           "https://yt3.ggpht.com",
           "https://i9.ytimg.com",
           "https://www.google.com"
         ],
+        formAction: ["'self'", "http://*", "https://*"],
         objectSrc: ["'none'"],
         frameSrc: [
           "'self'",
