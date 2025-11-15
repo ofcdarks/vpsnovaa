@@ -3,6 +3,8 @@
 // ================================================
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const { sanitizePrompt } = require('./sanitizePrompt');
 const bcrypt = require('bcryptjs');
@@ -4971,57 +4973,117 @@ async function startServer() {
             });
         };
 
-        // Tenta iniciar na porta especificada ou uma alternativa
-        let currentPort = PORT;
-        let portAvailable = await isPortAvailable(currentPort);
+        // Configuração de portas HTTP e HTTPS
+        const HTTP_PORT = parseInt(process.env.HTTP_PORT || PORT, 10);
+        const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || (PORT + 1), 10);
         
-        if (!portAvailable) {
-            console.warn(`⚠️  Porta ${currentPort} já está em uso. Tentando porta alternativa...`);
-            // Tenta portas alternativas (3001, 3002, etc.)
-            for (let i = 1; i <= 10; i++) {
-                currentPort = PORT + i;
-                portAvailable = await isPortAvailable(currentPort);
-                if (portAvailable) {
-                    console.log(`✅ Porta alternativa ${currentPort} disponível.`);
-                    break;
+        // Verificar se há certificados SSL configurados
+        const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+        const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
+        const hasSSL = SSL_KEY_PATH && SSL_CERT_PATH && fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH);
+        
+        // Função para encontrar porta disponível
+        const findAvailablePort = async (startPort) => {
+            for (let i = 0; i <= 10; i++) {
+                const testPort = startPort + i;
+                if (await isPortAvailable(testPort)) {
+                    return testPort;
                 }
             }
-            
-            if (!portAvailable) {
-                console.error(`❌ Erro: Não foi possível encontrar uma porta disponível (tentadas ${PORT}-${PORT + 10}).`);
-                console.error(`   A porta ${PORT} está em uso. Para resolver:`);
-                console.error(`   1. Execute o script: kill-port-3000.bat (recomendado)`);
-                console.error(`   2. Ou manualmente: netstat -ano | findstr :${PORT}`);
-                console.error(`   3. Depois: taskkill /PID <PID> /F`);
-                process.exit(1);
-            }
+            return null;
+        };
+        
+        // Iniciar servidor HTTP (sempre)
+        let httpPort = await findAvailablePort(HTTP_PORT);
+        if (!httpPort) {
+            console.error(`❌ Erro: Não foi possível encontrar uma porta HTTP disponível (tentadas ${HTTP_PORT}-${HTTP_PORT + 10}).`);
+            process.exit(1);
         }
-
-        const server = app.listen(currentPort, () => {
-            console.log(`✅ Servidor rodando na porta ${currentPort}`);
-            if (currentPort !== PORT) {
-                console.log(`   (Porta original ${PORT} estava ocupada)`);
+        
+        const httpServer = http.createServer(app);
+        httpServer.listen(httpPort, () => {
+            console.log(`✅ Servidor HTTP rodando na porta ${httpPort}`);
+            if (httpPort !== HTTP_PORT) {
+                console.log(`   (Porta original ${HTTP_PORT} estava ocupada)`);
             }
         });
         
-        // Trata erros após o servidor iniciar
-        server.on('error', (err) => {
+        httpServer.on('error', (err) => {
             if (err.code === 'EADDRINUSE') {
-                console.error(`❌ Erro: Porta ${currentPort} foi ocupada após a verificação.`);
-                console.error(`   Execute: kill-port-3000.bat`);
+                console.error(`❌ Erro: Porta HTTP ${httpPort} foi ocupada após a verificação.`);
                 process.exit(1);
             } else {
-                console.error(`❌ Erro no servidor:`, err);
+                console.error(`❌ Erro no servidor HTTP:`, err);
                 process.exit(1);
             }
         });
         
-        server.timeout = 0;
+        httpServer.timeout = 0;
+        
+        // Iniciar servidor HTTPS (se houver certificados)
+        let httpsServer = null;
+        if (hasSSL) {
+            try {
+                const httpsOptions = {
+                    key: fs.readFileSync(SSL_KEY_PATH),
+                    cert: fs.readFileSync(SSL_CERT_PATH)
+                };
+                
+                let httpsPort = await findAvailablePort(HTTPS_PORT);
+                if (!httpsPort) {
+                    console.warn(`⚠️  Não foi possível encontrar uma porta HTTPS disponível. Continuando apenas com HTTP.`);
+                } else {
+                    httpsServer = https.createServer(httpsOptions, app);
+                    httpsServer.listen(httpsPort, () => {
+                        console.log(`✅ Servidor HTTPS rodando na porta ${httpsPort}`);
+                        if (httpsPort !== HTTPS_PORT) {
+                            console.log(`   (Porta original ${HTTPS_PORT} estava ocupada)`);
+                        }
+                    });
+                    
+                    httpsServer.on('error', (err) => {
+                        console.error(`❌ Erro no servidor HTTPS:`, err.message);
+                        // Não encerra o processo, continua apenas com HTTP
+                    });
+                    
+                    httpsServer.timeout = 0;
+                }
+            } catch (sslError) {
+                console.warn(`⚠️  Erro ao configurar HTTPS: ${sslError.message}`);
+                console.warn(`   Continuando apenas com HTTP.`);
+            }
+        } else {
+            console.log(`ℹ️  Certificados SSL não configurados. Servidor rodando apenas em HTTP.`);
+            console.log(`   Para habilitar HTTPS, configure as variáveis de ambiente:`);
+            console.log(`   - SSL_KEY_PATH=/caminho/para/key.pem`);
+            console.log(`   - SSL_CERT_PATH=/caminho/para/cert.pem`);
+        }
+        
+        // Armazenar referências dos servidores para encerramento adequado
+        const servers = [httpServer];
+        if (httpsServer) servers.push(httpsServer);
 
         process.on('SIGINT', () => {
+            console.log('\n🛑 Encerrando servidores...');
+            // Fechar todos os servidores
+            servers.forEach((server, index) => {
+                server.close(() => {
+                    console.log(`✅ Servidor ${index === 0 ? 'HTTP' : 'HTTPS'} encerrado.`);
+                });
+            });
+            // Fechar banco de dados
             db.close((err) => {
                 if (err) console.error(err.message);
                 console.log('Conexão com o banco de dados fechada.');
+                process.exit(0);
+            });
+        });
+        
+        process.on('SIGTERM', () => {
+            console.log('\n🛑 Recebido SIGTERM, encerrando servidores...');
+            servers.forEach((server) => server.close());
+            db.close((err) => {
+                if (err) console.error(err.message);
                 process.exit(0);
             });
         });
