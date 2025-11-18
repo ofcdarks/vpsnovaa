@@ -4022,6 +4022,9 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                 };
                 
                 const onDone = () => {
+                    console.log(`✅ Stream finalizado. Buffer restante: ${textBuffer.length} caracteres`);
+                    console.log(`✅ Partes geradas até agora: ${reviewerResults.revisedScriptParts.length}/${totalParts}`);
+                    
                     // Processar texto restante no buffer
                     if (textBuffer.trim()) {
                         let cleanedPart = textBuffer.replace(/\[--PART \d+: (.*?)--\]/s, '').replace(/\[--ENDPART--\]/g, '').trim();
@@ -4043,16 +4046,20 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                                 part_content: cleanedPart
                             });
                             partsGenerated++;
+                            console.log(`✅ Parte final adicionada do buffer. Total de partes: ${reviewerResults.revisedScriptParts.length}`);
                         }
                     }
                     
                     // Se não gerou partes suficientes, dividir o texto completo
                     if (reviewerResults.revisedScriptParts.length === 0) {
+                        console.warn(`⚠️ Nenhuma parte gerada com delimitadores. Fazendo fallback para divisão manual.`);
                         // Fallback: dividir texto completo manualmente
                         const fullTextToSplit = textBuffer.replace(/\[--PART \d+: .*?--\]/g, '').replace(/\[--ENDPART--\]/g, '').trim();
                         if (fullTextToSplit) {
                             const words = fullTextToSplit.split(/\s+/);
                             const wordsPerPartCalc = Math.ceil(words.length / totalParts);
+                            
+                            console.log(`📊 Dividindo ${words.length} palavras em ${totalParts} partes de ~${wordsPerPartCalc} palavras`);
                             
                             for (let i = 0; i < totalParts && words.length > 0; i++) {
                                 const start = i * wordsPerPartCalc;
@@ -4067,10 +4074,17 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                                     });
                                 }
                             }
+                            console.log(`✅ Divisão manual concluída: ${reviewerResults.revisedScriptParts.length} partes`);
                         }
+                    } else if (reviewerResults.revisedScriptParts.length < totalParts) {
+                        console.warn(`⚠️ Apenas ${reviewerResults.revisedScriptParts.length}/${totalParts} partes geradas. Isso é normal se o roteiro for curto.`);
                     }
                     
+                    // Renderizar imediatamente após processar o buffer
+                    renderReviewerScriptPage();
+                    
                     fullText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
+                    console.log(`✅ Texto completo montado: ${fullText.split(/\s+/).filter(Boolean).length} palavras em ${reviewerResults.revisedScriptParts.length} partes`);
                 };
                 
                 const onError = (error) => {
@@ -4090,26 +4104,46 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                 const fullRevisedText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
                 const revisedWords = fullRevisedText.split(/\s+/).filter(Boolean).length;
                 
+                console.log(`📊 Validação final: ${revisedWords} palavras geradas (original: ${originalWords}, alvo: ${targetWords})`);
+                
                 // Validar: nunca menos que o original
                 if (revisedWords < originalWords) {
-                    addToLog(`⚠️ ATENÇÃO: Roteiro revisado tem ${revisedWords} palavras, menor que o original (${originalWords}). Expandindo partes...`, true);
+                    addToLog(`⚠️ ATENÇÃO: Roteiro revisado tem ${revisedWords} palavras, menor que o original (${originalWords}). Expandindo partes sequencialmente...`, true);
                     
-                    // Expansão: adicionar conteúdo adicional nas partes existentes
-                    const wordsNeeded = Math.ceil((originalWords - revisedWords) * 1.1); // 10% de margem
-                    const wordsPerPartToAdd = Math.max(50, Math.ceil(wordsNeeded / reviewerResults.revisedScriptParts.length));
+                    // Expansão SEQUENCIAL: adicionar conteúdo adicional nas partes existentes, uma por vez
+                    const wordsNeeded = Math.ceil((originalWords - revisedWords) * 1.15); // 15% de margem
+                    const wordsPerPartToAdd = Math.max(80, Math.ceil(wordsNeeded / reviewerResults.revisedScriptParts.length));
+                    
+                    console.log(`📈 Expandindo ${reviewerResults.revisedScriptParts.length} partes. Adicionar ~${wordsPerPartToAdd} palavras por parte.`);
                     
                     for (let i = 0; i < reviewerResults.revisedScriptParts.length; i++) {
+                        showProgressModal("Expandindo roteiro...", `Expandindo parte ${i + 1} de ${reviewerResults.revisedScriptParts.length}...`);
+                        
                         const part = reviewerResults.revisedScriptParts[i];
-                        const expansionPrompt = `Expanda o seguinte texto adicionando mais detalhes, exemplos, explicacoes e contexto. Mantenha o sentido original e TODAS as informacoes existentes. Apenas ADICIONE conteudo, nunca remova. O texto expandido deve ter aproximadamente ${wordsPerPartToAdd} palavras adicionais, mantendo aproximadamente 320 palavras por parte.
+                        const currentWords = part.part_content.split(/\s+/).filter(Boolean).length;
+                        const targetWordsForPart = currentWords + wordsPerPartToAdd;
+                        
+                        const expansionPrompt = `Expanda o texto abaixo adicionando mais detalhes, exemplos, explicações e contexto RELEVANTES ao tema. 
+                        
+INSTRUÇÕES CRÍTICAS:
+- Mantenha TODAS as informações originais (não remova nada)
+- Apenas ADICIONE conteúdo novo e relevante
+- O texto expandido deve ter aproximadamente ${targetWordsForPart} palavras (atualmente: ${currentWords} palavras)
+- Mantenha o mesmo tom, estilo e linguagem
+- NÃO adicione títulos, marcadores ou tags
+- Apenas narração pura para voice-over
+- Certifique-se de que o texto expandido seja COMPLETO (sem cortes)
 
-TEXTO ATUAL:
-"""${removeAccents(part.part_content)}"""`;
+TEXTO ATUAL (${currentWords} palavras):
+"""${removeAccents(part.part_content)}"""
+
+Texto expandido (alvo: ${targetWordsForPart} palavras):`;
                         
                         try {
                             const expansionResult = await apiRequestWithFallback('/api/generate', 'POST', {
                                 prompt: expansionPrompt,
                                 model,
-                                maxOutputTokens: 2048,
+                                maxOutputTokens: Math.ceil(targetWordsForPart / 0.75 * 1.3),
                                 temperature: 0.7
                             });
                             
@@ -4121,15 +4155,19 @@ TEXTO ATUAL:
                                 expandedText = expandedText.replace(/^```[\w]*\n?|\n?```$/gm, '').trim();
                                 
                                 const expandedWords = expandedText.split(/\s+/).filter(Boolean).length;
-                                const currentWords = part.part_content.split(/\s+/).filter(Boolean).length;
+                                
+                                console.log(`✅ Parte ${i + 1}: ${currentWords} → ${expandedWords} palavras`);
                                 
                                 if (expandedWords > currentWords) {
                                     reviewerResults.revisedScriptParts[i].part_content = expandedText;
                                     renderReviewerScriptPage();
+                                } else {
+                                    console.warn(`⚠️ Parte ${i + 1}: Expansão não aumentou palavras (${currentWords} → ${expandedWords})`);
                                 }
                             }
                         } catch (error) {
-                            console.warn(`Erro ao expandir parte ${i + 1}:`, error);
+                            console.error(`❌ Erro ao expandir parte ${i + 1}:`, error);
+                            addToLog(`Erro ao expandir parte ${i + 1}: ${error.message}`, true);
                         }
                     }
                     
@@ -4137,13 +4175,17 @@ TEXTO ATUAL:
                     const newFullText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
                     const newRevisedWords = newFullText.split(/\s+/).filter(Boolean).length;
                     if (newRevisedWords >= originalWords) {
-                        addToLog(`✅ Roteiro expandido: ${newRevisedWords} palavras (original: ${originalWords}, aumento: ${((newRevisedWords - originalWords) / originalWords * 100).toFixed(1)}%)`, false);
-                } else {
-                        addToLog(`⚠️ Ainda faltam ${originalWords - newRevisedWords} palavras. Considere revisar manualmente.`, true);
+                        const increasePercent = ((newRevisedWords - originalWords) / originalWords * 100).toFixed(1);
+                        addToLog(`✅ Roteiro expandido com sucesso: ${newRevisedWords} palavras (original: ${originalWords}, aumento: +${increasePercent}%)`, false);
+                        console.log(`✅ Expansão bem-sucedida: ${originalWords} → ${newRevisedWords} palavras (+${increasePercent}%)`);
+                    } else {
+                        addToLog(`⚠️ Roteiro ainda é menor que o original: ${newRevisedWords} palavras (original: ${originalWords}, faltam: ${originalWords - newRevisedWords} palavras). Considere revisar manualmente ou aplicar melhorias novamente.`, true);
+                        console.warn(`⚠️ Expansão incompleta: ${newRevisedWords}/${originalWords} palavras`);
                     }
                 } else {
                     const increase = ((revisedWords - originalWords) / originalWords * 100).toFixed(1);
-                    addToLog(`✅ Roteiro revisado: ${revisedWords} palavras (original: ${originalWords}, ${increase > 0 ? '+' : ''}${increase}%)`, false);
+                    addToLog(`✅ Roteiro revisado com sucesso: ${revisedWords} palavras (original: ${originalWords}, ${increase > 0 ? '+' : ''}${increase}%)`, false);
+                    console.log(`✅ Roteiro completo: ${originalWords} → ${revisedWords} palavras (${increase > 0 ? '+' : ''}${increase}%)`);
                 }
                 
                 // Salvar texto completo
@@ -7261,6 +7303,16 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                     showSuccessToast("Ultimo roteiro gerado foi importado.");
                 } else {
                     showSuccessToast("Nenhum roteiro gerado para importar.");
+                }
+            }
+            
+            if (targetId === 'import-last-script-for-translator') {
+                const translatorInput = document.getElementById('translator-input-text');
+                if (translatorInput && scriptResults.fullResult && scriptResults.fullResult.full_script_text) {
+                    translatorInput.value = scriptResults.fullResult.full_script_text;
+                    showSuccessToast(`Roteiro importado com sucesso (${scriptResults.fullResult.full_script_text.length} caracteres).`);
+                } else {
+                    showSuccessToast('Nenhum roteiro disponível para importar. Gere um roteiro primeiro.', true);
                 }
             }
             
