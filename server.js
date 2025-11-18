@@ -1497,24 +1497,96 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-const callApiWithRetries = async (apiCallFunction) => {
+const callApiWithRetries = async (apiCallFunction, maxRetries = 5) => {
   let lastError = null;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < maxRetries; i++) {
     try {
       return await apiCallFunction();
     } catch (error) {
       lastError = error;
       const errorMessage = (error.response?.data?.error?.message || error.message || "").toLowerCase();
+      const errorMessageFull = error.response?.data?.error?.message || error.message || "";
       const statusCode = error.response?.status;
-      if (error.code === 'ENOTFOUND' || (statusCode >= 400 && statusCode < 500 && statusCode !== 429)) throw error;
-      if (statusCode === 429 || errorMessage.includes('overloaded') || (statusCode >= 500 && statusCode <= 599)) {
-        console.warn(`Falha na chamada da API (tentativa ${i + 1}), tentando novamente em 2 segundos...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      const errorCode = error.response?.data?.error?.code;
+      
+      // Não fazer retry para erros de autenticação, permissão ou dados inválidos (exceto rate limit)
+      if (error.code === 'ENOTFOUND' || (statusCode >= 400 && statusCode < 500 && statusCode !== 429)) {
+        // Exceção: rate_limit_exceeded sempre deve ter retry
+        if (errorCode !== 'rate_limit_exceeded' && !errorMessage.includes('rate limit')) {
+          throw error;
+        }
+      }
+      
+      // Calcular tempo de espera com backoff exponencial
+      let waitTime = Math.min(1000 * Math.pow(2, i), 60000); // Backoff exponencial, máximo 60s
+      
+      // Rate limit específico - extrair tempo recomendado da mensagem
+      if (statusCode === 429 || errorCode === 'rate_limit_exceeded' || errorMessage.includes('rate limit')) {
+        console.warn(`⚠️ Rate limit atingido (tentativa ${i + 1}/${maxRetries})`);
+        console.warn(`   Erro: ${errorMessageFull.substring(0, 200)}`);
+        
+        // Tentar extrair o tempo de espera recomendado da mensagem
+        // Exemplos de mensagem:
+        // "Please try again in 938ms."
+        // "Please try again in 2.5s."
+        // "Please try again in 30 seconds."
+        const waitMatch = errorMessageFull.match(/try again in (\d+(?:\.\d+)?)\s*(ms|s|second|seconds|millisecond|milliseconds)/i);
+        if (waitMatch) {
+          const value = parseFloat(waitMatch[1]);
+          const unit = waitMatch[2].toLowerCase();
+          
+          if (unit.startsWith('ms')) {
+            waitTime = Math.ceil(value);
+          } else {
+            waitTime = Math.ceil(value * 1000);
+          }
+          
+          // Adicionar margem de segurança de 10%
+          waitTime = Math.ceil(waitTime * 1.1);
+          
+          console.log(`⏱️ Tempo de espera extraído da API: ${waitTime}ms (com margem de segurança)`);
+        } else {
+          // Se não conseguir extrair, usar backoff exponencial mais agressivo para rate limits
+          waitTime = Math.min(2000 * Math.pow(2, i), 120000); // Até 120 segundos
+          console.log(`⏱️ Usando backoff exponencial: ${waitTime}ms`);
+        }
+        
+        // Verificar header Retry-After (alguns providers incluem)
+        const retryAfter = error.response?.headers?.['retry-after'];
+        if (retryAfter) {
+          const retryAfterMs = parseInt(retryAfter) * 1000;
+          if (!isNaN(retryAfterMs) && retryAfterMs > 0) {
+            waitTime = Math.max(waitTime, retryAfterMs);
+            console.log(`⏱️ Header Retry-After encontrado: ${retryAfterMs}ms`);
+          }
+        }
+        
+        if (i < maxRetries - 1) {
+          console.log(`⏳ Aguardando ${(waitTime / 1000).toFixed(1)}s antes de tentar novamente...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      } else if (errorMessage.includes('overloaded') || (statusCode >= 500 && statusCode <= 599)) {
+        // Servidor sobrecarregado ou erro interno - usar backoff exponencial
+        console.warn(`⚠️ Servidor sobrecarregado ou erro interno (tentativa ${i + 1}/${maxRetries})`);
+        if (i < maxRetries - 1) {
+          console.log(`⏳ Aguardando ${(waitTime / 1000).toFixed(1)}s antes de tentar novamente...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
       } else {
+        // Outros erros - não fazer retry
         throw error;
       }
     }
   }
+  
+  // Se todas as tentativas falharam, lançar o último erro com mensagem melhorada
+  const errorMessage = lastError.response?.data?.error?.message || lastError.message || "";
+  const statusCode = lastError.response?.status;
+  
+  if (statusCode === 429 || errorMessage.toLowerCase().includes('rate limit')) {
+    throw new Error(`❌ Limite de requisições atingido após ${maxRetries} tentativas. A API está temporariamente indisponível devido ao alto volume de uso. Por favor, aguarde alguns minutos e tente novamente.\n\nDetalhes técnicos: ${errorMessage.substring(0, 300)}`);
+  }
+  
   throw lastError;
 };
 
@@ -1703,55 +1775,91 @@ app.post('/api/generate', verifyToken, async (req, res) => {
         res.flushHeaders();
 
         let apiResponseStream;
-        if (provider === 'claude') {
-            if (!claudeKey) throw new Error("Chave de API Claude não configurada.");
-            // Respeitar limite máximo de tokens de saída do modelo Claude
-            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-            const claudeTemperature = sanitizedTemperature ?? 0.7;
-            const response = await axios.post('https://api.anthropic.com/v1/messages', {
-                model: model,
-                max_tokens: claudeMaxTokens,
-                temperature: claudeTemperature,
-                messages: [{ role: "user", content: prompt }], stream: true
-            }, { 
-                headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-                responseType: 'stream'
-            });
-            apiResponseStream = response.data;
-        } else if (provider === 'gpt') {
-            if (!gptKey) throw new Error("Chave de API OpenAI (GPT) não configurada.");
-            const body = {
-                model: model,
-                messages: [{ role: "user", content: prompt }],
-                stream: true
-            };
-            // Respeitar limite máximo de tokens de saída do modelo
-            if (sanitizedMaxOutputTokens) {
-                body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
-            } else {
-                body.max_tokens = tokenLimits.maxOutputTokens;
+        
+        // Função auxiliar para fazer requisição streaming com retry
+        const makeStreamingRequest = async (attemptNumber = 0, maxAttempts = 3) => {
+            try {
+                if (provider === 'claude') {
+                    if (!claudeKey) throw new Error("Chave de API Claude não configurada.");
+                    const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
+                    const claudeTemperature = sanitizedTemperature ?? 0.7;
+                    const response = await axios.post('https://api.anthropic.com/v1/messages', {
+                        model: model,
+                        max_tokens: claudeMaxTokens,
+                        temperature: claudeTemperature,
+                        messages: [{ role: "user", content: prompt }], stream: true
+                    }, { 
+                        headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+                        responseType: 'stream',
+                        timeout: 300000
+                    });
+                    return response.data;
+                } else if (provider === 'gpt') {
+                    if (!gptKey) throw new Error("Chave de API OpenAI (GPT) não configurada.");
+                    const body = {
+                        model: model,
+                        messages: [{ role: "user", content: prompt }],
+                        stream: true
+                    };
+                    if (sanitizedMaxOutputTokens) {
+                        body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
+                    } else {
+                        body.max_tokens = tokenLimits.maxOutputTokens;
+                    }
+                    if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
+                    const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
+                        headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
+                        responseType: 'stream',
+                        timeout: 300000
+                    });
+                    return response.data;
+                } else {
+                    if (geminiKeys.length === 0) throw new Error("Nenhuma chave de API Gemini está configurada.");
+                    const key = geminiKeys[0];
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
+                    const generationConfig = {};
+                    if (schema) generationConfig.response_mime_type = "application/json";
+                    generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
+                    if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
+                    const response = await axios.post(apiUrl, {
+                        contents: [{ role: "user", parts: [{ text: prompt }] }],
+                        generationConfig
+                    }, { 
+                        responseType: 'stream',
+                        timeout: 300000
+                    });
+                    return response.data;
+                }
+            } catch (error) {
+                const statusCode = error.response?.status;
+                const errorCode = error.response?.data?.error?.code;
+                const errorMessage = error.response?.data?.error?.message || error.message || "";
+                
+                // Verificar se é rate limit
+                if ((statusCode === 429 || errorCode === 'rate_limit_exceeded' || errorMessage.toLowerCase().includes('rate limit')) && attemptNumber < maxAttempts - 1) {
+                    console.warn(`⚠️ [Streaming] Rate limit atingido (tentativa ${attemptNumber + 1}/${maxAttempts})`);
+                    
+                    // Extrair tempo de espera
+                    let waitTime = Math.min(2000 * Math.pow(2, attemptNumber), 60000);
+                    const waitMatch = errorMessage.match(/try again in (\d+(?:\.\d+)?)\s*(ms|s|second|seconds)/i);
+                    if (waitMatch) {
+                        const value = parseFloat(waitMatch[1]);
+                        const unit = waitMatch[2].toLowerCase();
+                        waitTime = unit.startsWith('ms') ? Math.ceil(value * 1.1) : Math.ceil(value * 1000 * 1.1);
+                        console.log(`⏱️ [Streaming] Aguardando ${(waitTime / 1000).toFixed(1)}s (extraído da API)...`);
+                    } else {
+                        console.log(`⏱️ [Streaming] Aguardando ${(waitTime / 1000).toFixed(1)}s (backoff exponencial)...`);
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    return makeStreamingRequest(attemptNumber + 1, maxAttempts);
+                }
+                
+                throw error;
             }
-            if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
-            const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
-                headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
-                responseType: 'stream'
-            });
-            apiResponseStream = response.data;
-        } else {
-            if (geminiKeys.length === 0) throw new Error("Nenhuma chave de API Gemini está configurada.");
-            const key = geminiKeys[0];
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
-            const generationConfig = {};
-            if (schema) generationConfig.response_mime_type = "application/json";
-            // Respeitar limite máximo de tokens de saída do modelo Gemini
-            generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-            if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
-            const response = await axios.post(apiUrl, {
-                contents: [{ role: "user", parts: [{ text: prompt }] }],
-                generationConfig
-            }, { responseType: 'stream' });
-            apiResponseStream = response.data;
-        }
+        };
+        
+        apiResponseStream = await makeStreamingRequest();
         apiResponseStream.pipe(res);
         req.on('close', () => {
             if (apiResponseStream && typeof apiResponseStream.destroy === 'function') apiResponseStream.destroy();

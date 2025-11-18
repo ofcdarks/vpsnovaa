@@ -7,6 +7,10 @@ const TOKEN_LIMITS = {
     // ==============================
     // OPENAI
     // ==============================
+    'gpt-5.1': {
+        maxContextLength: 200000,
+        maxOutputTokens: 32768
+    },
     'gpt-4o': {
         maxContextLength: 128000,
         maxOutputTokens: 16384
@@ -90,6 +94,7 @@ function getTokenLimits(model) {
 
     // 2) Matching por prefixos bancados pelas APIs reais
     const patterns = [
+        { key: 'gpt-5.1', match: ['gpt-5.1', 'gpt51', 'gpt-5-1', 'gpt5.1'] },
         { key: 'gpt-4o', match: ['gpt-4o', 'gpt4o', 'gpt-4.1', 'gpt-4.0'] },
         { key: 'gpt-4-turbo', match: ['gpt-4-turbo', 'gpt4turbo'] },
         { key: 'gpt-3.5-turbo', match: ['gpt-3.5', 'gpt35'] },
@@ -113,6 +118,7 @@ function getTokenLimits(model) {
     }
 
     // 3) Matching genérico por tipo
+    if (m.includes('gpt-5')) return TOKEN_LIMITS['gpt-5.1'];
     if (m.includes('gpt-4')) return TOKEN_LIMITS['gpt-4o'];
     if (m.includes('gpt-3.5')) return TOKEN_LIMITS['gpt-3.5-turbo'];
     if (m.includes('claude-3-5')) return TOKEN_LIMITS['claude-3-5-sonnet'];

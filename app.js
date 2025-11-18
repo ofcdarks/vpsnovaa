@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Token Limits Dataset (Updated for 2024/2025 APIs)
     // Replicado do token-limits.js para uso no frontend
     const TOKEN_LIMITS_FRONTEND = {
+        'gpt-5.1': { maxContextLength: 200000, maxOutputTokens: 32768 },
         'gpt-4o': { maxContextLength: 128000, maxOutputTokens: 16384 },
         'gpt-4-turbo': { maxContextLength: 128000, maxOutputTokens: 16384 },
         'gpt-3.5-turbo': { maxContextLength: 16385, maxOutputTokens: 4096 },
@@ -38,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Modelo recomendado padrão (mais estável e confiável)
-    const RECOMMENDED_MODEL = 'gpt-4o';
+    const RECOMMENDED_MODEL = 'gpt-5.1';
     
     // Função helper para fazer requisição com fallback automático para modelo recomendado
     const apiRequestWithFallback = async (url, method, data, retries = 1) => {
@@ -94,6 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2) Matching por prefixos
         const patterns = [
+            { key: 'gpt-5.1', match: ['gpt-5.1', 'gpt51', 'gpt-5-1', 'gpt5.1'] },
             { key: 'gpt-4o', match: ['gpt-4o', 'gpt4o', 'gpt-4.1', 'gpt-4.0'] },
             { key: 'gpt-4-turbo', match: ['gpt-4-turbo', 'gpt4turbo'] },
             { key: 'gpt-3.5-turbo', match: ['gpt-3.5', 'gpt35'] },
@@ -117,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 3) Matching genérico por tipo
+        if (m.includes('gpt-5')) return TOKEN_LIMITS_FRONTEND['gpt-5.1'];
         if (m.includes('gpt-4')) return TOKEN_LIMITS_FRONTEND['gpt-4o'];
         if (m.includes('gpt-3.5')) return TOKEN_LIMITS_FRONTEND['gpt-3.5-turbo'];
         if (m.includes('claude-3-5')) return TOKEN_LIMITS_FRONTEND['claude-3-5-sonnet'];
@@ -3495,6 +3498,12 @@ ${removeAccents(final_check_instruction)}`;
                     }
                 }
 
+                // Resetar contador de retry em caso de sucesso de uma parte
+                if (window.scriptGenerationRetryCount > 0) {
+                    console.log(`✅ Parte gerada com sucesso após ${window.scriptGenerationRetryCount} tentativas. Resetando contador.`);
+                    window.scriptGenerationRetryCount = 0;
+                }
+
                 // Verifica se todas as partes foram geradas
                 if (scriptResults.fullResult && scriptResults.fullResult.script_parts.length < scriptResults.fullResult.total_parts) {
                     addToLog(`A transmissao terminou antes da conclusao. Partes: ${scriptResults.fullResult.script_parts.length}/${scriptResults.fullResult.total_parts}. A tentar continuar...`, true);
@@ -3528,10 +3537,50 @@ ${removeAccents(final_check_instruction)}`;
                     return;
                 }
 
-                addToLog(`Erro: ${error.message}. Tentando continuar em 2 segundos...`, true);
+                // Detectar se é rate limit para aguardar mais tempo
+                const errorMsg = error.message || '';
+                const isRateLimit = errorMsg.toLowerCase().includes('rate limit') || 
+                                   errorMsg.toLowerCase().includes('429') ||
+                                   errorMsg.toLowerCase().includes('muitas requisições') ||
+                                   errorMsg.toLowerCase().includes('aguarde');
+                
+                // Contador de tentativas consecutivas para evitar loop infinito em erros críticos
+                if (!window.scriptGenerationRetryCount) {
+                    window.scriptGenerationRetryCount = 0;
+                }
+                window.scriptGenerationRetryCount++;
+                
+                // Se muitas tentativas consecutivas falharam, aumentar delay
+                let retryDelay = 2000;
+                if (isRateLimit) {
+                    // Para rate limit, aguardar mais tempo
+                    retryDelay = Math.min(5000 * window.scriptGenerationRetryCount, 60000); // Até 60s
+                    addToLog(`⚠️ Limite de requisições atingido. Aguardando ${retryDelay / 1000}s antes de tentar novamente (tentativa ${window.scriptGenerationRetryCount})...`, true);
+                } else {
+                    retryDelay = Math.min(2000 * window.scriptGenerationRetryCount, 30000); // Até 30s
+                    addToLog(`❌ Erro: ${error.message}. Tentando novamente em ${retryDelay / 1000}s (tentativa ${window.scriptGenerationRetryCount})...`, true);
+                }
+                
+                // Máximo de 10 tentativas para evitar loop infinito em erros críticos
+                if (window.scriptGenerationRetryCount >= 10) {
+                    addToLog(`❌ ERRO CRÍTICO: Falha após 10 tentativas. Interrompendo geração. Por favor, verifique sua conexão e chaves de API.`, true);
+                    hideProgressModal();
+                    window.scriptGenerationRetryCount = 0;
+                    return;
+                }
+                
+                // Mostrar no modal que está aguardando
+                const currentPart = scriptResults.fullResult ? scriptResults.fullResult.script_parts.length + 1 : 1;
+                const totalParts = scriptResults.fullResult ? scriptResults.fullResult.total_parts : form.parts;
+                showProgressModal(
+                    `⏳ Aguardando ${retryDelay / 1000}s...`, 
+                    `Tentativa ${window.scriptGenerationRetryCount}/10 - Parte ${currentPart}/${totalParts}`
+                );
+                
                 setTimeout(() => {
+                    console.log(`🔄 Retentando geração (tentativa ${window.scriptGenerationRetryCount})...`);
                     handlers['generate-script'](e, true);
-                }, 2000); 
+                }, retryDelay); 
             };
 
             streamApiRequest('/api/generate', { prompt: promptWithContinuation, model: form.model, stream: true }, onChunk, onDone, onError);
@@ -4022,6 +4071,12 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                 };
                 
                 const onDone = () => {
+                    // Resetar contador de retry em caso de sucesso
+                    if (window.reviewerRetryCount > 0) {
+                        console.log(`✅ Revisor: Stream completado com sucesso após ${window.reviewerRetryCount} tentativas. Resetando contador.`);
+                        window.reviewerRetryCount = 0;
+                    }
+                    
                     console.log(`✅ Stream finalizado. Buffer restante: ${textBuffer.length} caracteres`);
                     console.log(`✅ Partes geradas até agora: ${reviewerResults.revisedScriptParts.length}/${totalParts}`);
                     
@@ -4088,7 +4143,63 @@ ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
                 };
                 
                 const onError = (error) => {
-                    throw error;
+                    console.error('❌ Erro durante streaming do revisor:', error);
+                    
+                    // Detectar se é rate limit
+                    const errorMsg = error.message || '';
+                    const isRateLimit = errorMsg.toLowerCase().includes('rate limit') || 
+                                       errorMsg.toLowerCase().includes('429') ||
+                                       errorMsg.toLowerCase().includes('muitas requisições') ||
+                                       errorMsg.toLowerCase().includes('aguarde');
+                    
+                    // Contador de tentativas para o revisor
+                    if (!window.reviewerRetryCount) {
+                        window.reviewerRetryCount = 0;
+                    }
+                    window.reviewerRetryCount++;
+                    
+                    // Calcular delay com backoff
+                    let retryDelay = 2000;
+                    if (isRateLimit) {
+                        retryDelay = Math.min(5000 * window.reviewerRetryCount, 60000); // Até 60s
+                        console.log(`⚠️ Rate limit no revisor. Aguardando ${retryDelay / 1000}s (tentativa ${window.reviewerRetryCount})...`);
+                    } else {
+                        retryDelay = Math.min(2000 * window.reviewerRetryCount, 30000); // Até 30s
+                        console.log(`❌ Erro no revisor. Aguardando ${retryDelay / 1000}s (tentativa ${window.reviewerRetryCount})...`);
+                    }
+                    
+                    // Máximo 10 tentativas
+                    if (window.reviewerRetryCount >= 10) {
+                        addToLog(`❌ ERRO CRÍTICO: Falha após 10 tentativas no revisor. Por favor, verifique sua conexão e chaves de API.`, true);
+                        hideProgressModal();
+                        window.reviewerRetryCount = 0;
+                        throw error;
+                    }
+                    
+                    // Informar usuário
+                    addToLog(`⚠️ Erro temporário (tentativa ${window.reviewerRetryCount}/10). Aguardando ${retryDelay / 1000}s antes de tentar novamente...`, true);
+                    showProgressModal(
+                        `⏳ Aguardando ${retryDelay / 1000}s...`, 
+                        `Retentando aplicação de melhorias (tentativa ${window.reviewerRetryCount}/10)...`
+                    );
+                    
+                    // Aguardar e tentar novamente
+                    setTimeout(async () => {
+                        console.log(`🔄 Retentando aplicação de melhorias (tentativa ${window.reviewerRetryCount})...`);
+                        try {
+                            // Tentar novamente a requisição streaming
+                            await streamApiRequest('/api/generate', { 
+                                prompt, 
+                                model,
+                                maxOutputTokens,
+                                temperature: 0.7,
+                                stream: true
+                            }, onChunk, onDone, onError);
+                        } catch (retryError) {
+                            console.error('❌ Erro na retentativa:', retryError);
+                            onError(retryError);
+                        }
+                    }, retryDelay);
                 };
                 
                 // Chamar API com streaming
@@ -6672,12 +6783,13 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             </optgroup>
         `;
 
-        // Modelo recomendado: GPT-4o (mais estável e confiável)
-        const RECOMMENDED_MODEL = 'gpt-4o';
+        // Modelo recomendado: GPT-5.1 (mais avançado e inteligente)
+        const RECOMMENDED_MODEL = 'gpt-5.1';
 
         const gptModelOptions = `
             <optgroup label="OpenAI GPT (Recomendado)">
-                <option value="gpt-4o" selected>⭐ GPT-4o (Recomendado)</option>
+                <option value="gpt-5.1" selected>🚀 GPT-5.1 (Novo - Mais Inteligente)</option>
+                <option value="gpt-4o">⭐ GPT-4o (Recomendado)</option>
                 <option value="gpt-4-turbo">GPT-4 Turbo</option>
                 <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
             </optgroup>
