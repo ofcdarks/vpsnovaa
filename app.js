@@ -690,19 +690,56 @@ document.addEventListener('DOMContentLoaded', () => {
         const progress = total > 0 ? Math.round((current / total) * 100) : 0;
         const isComplete = current === total && total > 0;
 
-        let title, titleColor, progressBarColor;
+        let title, titleColor, progressBarColor, showErrorDetails = false;
         if (error) {
-            title = 'Erro na Narracao';
-            titleColor = 'text-red-600 dark:text-red-400';
-            progressBarColor = 'bg-red-500';
+            // Detectar tipo de erro para título mais específico
+            if (message.includes('Quota') || message.includes('quota') || message.includes('Limite')) {
+                title = '⚠️ Limite da API Atingido';
+                titleColor = 'text-orange-600 dark:text-orange-400';
+                progressBarColor = 'bg-orange-500';
+                showErrorDetails = true;
+            } else if (message.includes('indisponível') || message.includes('502') || message.includes('503')) {
+                title = '⚠️ Servidor Indisponível';
+                titleColor = 'text-yellow-600 dark:text-yellow-400';
+                progressBarColor = 'bg-yellow-500';
+            } else if (message.includes('conexão') || message.includes('rede')) {
+                title = '📡 Erro de Conexão';
+                titleColor = 'text-yellow-600 dark:text-yellow-400';
+                progressBarColor = 'bg-yellow-500';
+            } else if (message.includes('chave') || message.includes('API')) {
+                title = '🔑 Erro de Autenticação';
+                titleColor = 'text-red-600 dark:text-red-400';
+                progressBarColor = 'bg-red-500';
+            } else {
+                title = '❌ Erro na Narração';
+                titleColor = 'text-red-600 dark:text-red-400';
+                progressBarColor = 'bg-red-500';
+            }
         } else if (isComplete) {
-            title = 'Narracao Concluida';
+            title = '✅ Narração Concluída';
             titleColor = 'text-green-600 dark:text-green-400';
             progressBarColor = 'bg-green-500';
         } else {
-            title = 'A gerar narracao...';
+            title = '🎙️ Gerando Narração...';
             titleColor = 'text-blue-600 dark:text-blue-400';
             progressBarColor = 'bg-blue-500';
+        }
+        
+        // Formatar mensagem para melhor exibição
+        let formattedMessage = message;
+        let additionalInfo = '';
+        
+        if (showErrorDetails && message.includes('\n')) {
+            // Se tiver quebras de linha, dividir em mensagem principal e detalhes
+            const parts = message.split('\n\n');
+            formattedMessage = parts[0];
+            if (parts.length > 1) {
+                additionalInfo = `
+                    <div class="mt-2 p-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded text-xs">
+                        ${parts.slice(1).join('<br>').replace(/\n/g, '<br>')}
+                    </div>
+                `;
+            }
         }
         
         panel.innerHTML = `
@@ -712,8 +749,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
                 </button>
             </h4>
-            <p class="text-xs text-gray-700 dark:text-gray-300 mb-2 truncate" title="${message}">${message}</p>
-            <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+            <p class="text-xs text-gray-700 dark:text-gray-300 mb-2 ${showErrorDetails ? '' : 'truncate'}" title="${message}">${formattedMessage}</p>
+            ${additionalInfo}
+            <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mt-2">
                 <div class="h-2 rounded-full ${progressBarColor}" style="width: ${progress}%;"></div>
             </div>
             <p class="text-right text-xs text-gray-500 dark:text-gray-400 mt-1">${progress}% (${current}/${total})</p>
@@ -925,14 +963,60 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch(endpoint, options);
             if (!response.ok) {
-                const data = await response.json().catch(() => ({ message: `Erro HTTP: ${response.status}` }));
+                const data = await response.json().catch(() => ({ message: null }));
+                
+                // Logout automático para erros de autenticação
                 if ((response.status === 401 || response.status === 403) && !endpoint.includes('/api/verify-session')) {
                      handleLogout();
                 }
-                throw new Error(data.message || `Erro: ${response.status} ${response.statusText}`);
+                
+                // Mensagens de erro mais amigáveis
+                let userFriendlyMessage = data.message;
+                
+                if (!userFriendlyMessage) {
+                    switch (response.status) {
+                        case 400:
+                            userFriendlyMessage = 'Requisição inválida. Verifique os dados enviados.';
+                            break;
+                        case 401:
+                            userFriendlyMessage = 'Sessão expirada. Faça login novamente.';
+                            break;
+                        case 403:
+                            userFriendlyMessage = 'Acesso negado. Você não tem permissão.';
+                            break;
+                        case 404:
+                            userFriendlyMessage = 'Recurso não encontrado. O trabalho pode ter expirado.';
+                            break;
+                        case 429:
+                            userFriendlyMessage = 'Muitas requisições. Aguarde alguns segundos e tente novamente.';
+                            break;
+                        case 500:
+                            userFriendlyMessage = 'Erro no servidor. Tente novamente em alguns instantes.';
+                            break;
+                        case 502:
+                            userFriendlyMessage = 'Servidor temporariamente indisponível. Tente novamente em alguns instantes.';
+                            break;
+                        case 503:
+                            userFriendlyMessage = 'Serviço em manutenção. Tente novamente mais tarde.';
+                            break;
+                        case 504:
+                            userFriendlyMessage = 'Tempo de resposta esgotado. O servidor demorou muito para responder.';
+                            break;
+                        default:
+                            userFriendlyMessage = `Erro ao processar requisição (Código: ${response.status})`;
+                    }
+                }
+                
+                throw new Error(userFriendlyMessage);
             }
             return await response.json().catch(() => ({}));
         } catch (error) {
+            // Erros de rede (sem conexão, etc)
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                console.error('Network Error:', error);
+                throw new Error('Erro de conexão. Verifique sua internet e tente novamente.');
+            }
+            
             console.error('API Request Error:', error);
             throw error;
         }
@@ -6162,28 +6246,107 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                         };
                         renderVoiceGenerationProgress(appState.voiceGenStatus);
 
+                        // Resetar contador de erros em caso de sucesso
+                        if (state.pollErrorCount > 0) {
+                            console.log('✅ Conexão restabelecida');
+                            state.pollErrorCount = 0;
+                        }
+                        
                         if (statusRes.status === 'completed') {
                             clearInterval(state.longGenInterval);
                             state.longGenInterval = null;
                             state.longGenJobId = null;
-                            showVoiceGenCompleteModal(statusRes.downloadUrl);
+                            showVoiceGenCompleteModal(statusRes.downloadUrl, statusRes.partDownloads || []);
+                            addToLog('✅ Narração gerada com sucesso!', false);
                             setTimeout(() => {
                                 appState.voiceGenStatus.active = false;
                                 renderVoiceGenerationProgress(appState.voiceGenStatus);
                             }, 5000);
+                        } else if (statusRes.status === 'partial') {
+                            clearInterval(state.longGenInterval);
+                            state.longGenInterval = null;
+                            state.longGenJobId = null;
+                            
+                            if (statusRes.partDownloads && statusRes.partDownloads.length > 0) {
+                                showVoiceGenCompleteModal(null, statusRes.partDownloads || []);
+                                addToLog(`⚠️ Geração parcial: ${statusRes.partDownloads.length} parte(s) disponível(is) para download. ${statusRes.message}`, false);
+                            } else {
+                                addToLog(`❌ Erro na geração de voz: ${statusRes.message}`, true);
+                            }
+                            setTimeout(() => {
+                                appState.voiceGenStatus.active = false;
+                                renderVoiceGenerationProgress(appState.voiceGenStatus);
+                            }, 10000);
                         } else if (statusRes.status === 'failed') {
                             clearInterval(state.longGenInterval);
                             state.longGenInterval = null;
                             state.longGenJobId = null;
-                            addToLog(`Erro na geracao de voz: ${statusRes.message}`, true);
+                            
+                            // Mensagem mais amigável dependendo do erro
+                            let errorMsg = statusRes.message || 'Erro desconhecido';
+                            if (errorMsg.includes('Quota') || errorMsg.includes('quota')) {
+                                addToLog(`❌ Limite da API atingido. ${errorMsg}`, true);
+                            } else if (errorMsg.includes('API') || errorMsg.includes('chave')) {
+                                addToLog(`❌ Problema com a chave da API. Verifique suas configurações. ${errorMsg}`, true);
+                            } else if (errorMsg.includes('modelo') || errorMsg.includes('model')) {
+                                addToLog(`❌ Problema com o modelo selecionado. Tente usar outro modelo. ${errorMsg}`, true);
+                            } else {
+                                addToLog(`❌ Falha na geração de voz: ${errorMsg}`, true);
+                            }
                         }
                     } catch (pollError) {
-                        clearInterval(state.longGenInterval);
-                        state.longGenInterval = null;
-                        state.longGenJobId = null;
-                        addToLog(`Erro ao verificar status da geracao: ${pollError.message}`, true);
-                        appState.voiceGenStatus = { active: true, current: 0, total: 1, message: pollError.message, error: true };
-                        renderVoiceGenerationProgress(appState.voiceGenStatus);
+                        console.error('Erro ao verificar status da geração:', pollError);
+                        
+                        // Se for erro 404, o job pode ter expirado
+                        if (pollError.message.includes('não encontrado') || pollError.message.includes('404')) {
+                            clearInterval(state.longGenInterval);
+                            state.longGenInterval = null;
+                            state.longGenJobId = null;
+                            addToLog('❌ Trabalho de geração expirou ou foi removido. Por favor, inicie uma nova geração.', true);
+                            appState.voiceGenStatus = { 
+                                active: false, 
+                                current: 0, 
+                                total: 0, 
+                                message: 'Trabalho expirado', 
+                                error: true 
+                            };
+                            renderVoiceGenerationProgress(appState.voiceGenStatus);
+                            return;
+                        }
+                        
+                        // Contar tentativas consecutivas de erro
+                        if (!state.pollErrorCount) state.pollErrorCount = 0;
+                        state.pollErrorCount++;
+                        
+                        // Se tiver muitos erros consecutivos, parar o polling
+                        if (state.pollErrorCount >= 5) {
+                            clearInterval(state.longGenInterval);
+                            state.longGenInterval = null;
+                            state.longGenJobId = null;
+                            state.pollErrorCount = 0;
+                            
+                            let errorMsg = 'Não foi possível acompanhar o progresso da geração. ';
+                            if (pollError.message.includes('temporariamente indisponível') || pollError.message.includes('502')) {
+                                errorMsg += 'O servidor está temporariamente indisponível. Aguarde alguns minutos e verifique o status novamente.';
+                            } else if (pollError.message.includes('conexão')) {
+                                errorMsg += 'Verifique sua conexão com a internet.';
+                            } else {
+                                errorMsg += 'Tente recarregar a página.';
+                            }
+                            
+                            addToLog(`❌ ${errorMsg}`, true);
+                            appState.voiceGenStatus = { 
+                                active: true, 
+                                current: 0, 
+                                total: 1, 
+                                message: errorMsg, 
+                                error: true 
+                            };
+                            renderVoiceGenerationProgress(appState.voiceGenStatus);
+                        } else {
+                            // Apenas logar o erro, mas continuar tentando
+                            console.warn(`⚠️ Tentativa ${state.pollErrorCount}/5 falhou ao verificar status. Tentando novamente...`);
+                        }
                     }
                 }, 2000);
 

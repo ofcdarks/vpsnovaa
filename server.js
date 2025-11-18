@@ -3432,8 +3432,11 @@ async function processScriptTtsJob(jobId, jobData) {
                                 console.error(`   A conta pode não ter acesso ao modelo TTS Preview ou a quota diária foi esgotada.`);
                                 console.error(`   Verifique: https://ai.dev/usage?tab=rate-limit`);
                                 
-                                job.status = 'failed';
-                                job.message = 'Quota diária do modelo TTS esgotada ou não configurada. Verifique sua conta na Google AI Studio (https://ai.dev/usage?tab=rate-limit). O modelo TTS está em pré-lançamento e pode ter limitações.';
+                            job.status = 'failed';
+                            job.message = '❌ Limite diário da API atingido.\n\n' +
+                                         '📊 A quota diária do modelo TTS foi esgotada ou não está configurada.\n' +
+                                         '🔗 Verifique seu uso em: https://ai.dev/usage?tab=rate-limit\n' +
+                                         '💡 Dica: O modelo TTS está em pré-lançamento e pode ter limitações de acesso.';
                                 throw new Error('Quota diária do modelo TTS esgotada. Verifique sua conta na Google AI Studio. O modelo TTS está em pré-lançamento e pode ter limitações de acesso.');
                             }
                         }
@@ -3539,7 +3542,9 @@ async function processScriptTtsJob(jobId, jobData) {
                             console.error(`   Verifique: https://ai.dev/usage?tab=rate-limit`);
                             
                             job.status = 'failed';
-                            job.message = 'Quota diária do modelo TTS esgotada ou não configurada. Verifique sua conta na Google AI Studio.';
+                            job.message = '❌ Limite diário da API atingido.\n\n' +
+                                         '📊 A quota diária do modelo TTS foi esgotada ou não está configurada.\n' +
+                                         '🔗 Verifique seu uso em: https://ai.dev/usage?tab=rate-limit';
                             throw new Error('Quota diária do modelo TTS esgotada. Verifique sua conta na Google AI Studio (https://ai.dev/usage?tab=rate-limit)');
                         }
                         
@@ -3641,7 +3646,30 @@ async function processScriptTtsJob(jobId, jobData) {
     } catch (error) {
         console.error(`Erro no trabalho TTS de roteiro ${jobId}:`, error);
         job.status = 'failed';
-        job.message = error.message || 'Ocorreu um erro desconhecido durante o processamento.';
+        
+        // Mensagens mais claras e úteis para o usuário
+        let userMessage = error.message || 'Ocorreu um erro desconhecido durante o processamento.';
+        
+        // Melhorar mensagens específicas
+        if (userMessage.includes('Quota') || userMessage.includes('quota')) {
+            // Já tem uma boa mensagem de quota
+            job.message = userMessage;
+        } else if (userMessage.includes('API_KEY_INVALID') || userMessage.includes('chave') || userMessage.includes('autenticação')) {
+            job.message = '❌ Chave da API inválida. Verifique suas configurações e certifique-se de que a chave está correta.';
+        } else if (userMessage.includes('PERMISSION_DENIED') || userMessage.includes('permissão')) {
+            job.message = '❌ Sem permissão para usar este modelo. Verifique se sua conta tem acesso ao modelo TTS selecionado.';
+        } else if (userMessage.includes('INVALID_ARGUMENT') || userMessage.includes('argumento')) {
+            job.message = '❌ Parâmetros inválidos enviados para a API. Tente usar outro modelo ou configuração.';
+        } else if (userMessage.includes('RESOURCE_EXHAUSTED') || userMessage.includes('429')) {
+            job.message = '❌ Limite de requisições atingido. Aguarde alguns minutos e tente novamente.';
+        } else if (userMessage.includes('UNAVAILABLE') || userMessage.includes('indisponível')) {
+            job.message = '⚠️ Serviço temporariamente indisponível. Tente novamente em alguns minutos.';
+        } else if (userMessage.includes('DEADLINE_EXCEEDED') || userMessage.includes('timeout')) {
+            job.message = '⏱️ Tempo limite excedido. O servidor demorou muito para responder. Tente novamente.';
+        } else {
+            // Manter mensagem original se não for reconhecida
+            job.message = `❌ Erro na geração: ${userMessage}`;
+        }
     } finally {
         for (const filePath of tempFilePaths) {
             try {
@@ -3716,10 +3744,26 @@ app.get('/api/tts/status/:jobId', verifyToken, (req, res) => {
     const job = ttsJobs[jobId];
 
     if (!job) {
-        return res.status(404).json({ message: 'Trabalho não encontrado.' });
+        console.log(`❌ Job ${jobId} não encontrado. Jobs disponíveis: ${Object.keys(ttsJobs).length}`);
+        return res.status(404).json({ 
+            message: 'Trabalho de geração não encontrado. O trabalho pode ter sido concluído e removido automaticamente, ou pode ter expirado.',
+            suggestion: 'Inicie uma nova geração de voz.' 
+        });
     }
 
-    res.json(job);
+    // Incluir informações úteis no status
+    const statusResponse = {
+        status: job.status,
+        progress: job.progress,
+        total: job.total,
+        message: job.message,
+        downloadUrl: job.downloadUrl,
+        partDownloads: job.partDownloads || [],
+        createdAt: job.createdAt,
+        finishedAt: job.finishedAt
+    };
+
+    res.json(statusResponse);
 });
 
 // Endpoint para limpar cache (arquivos temporários)
