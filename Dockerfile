@@ -20,6 +20,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalar dependências de produção como root
+# cross-env é necessário para o CMD, então deve estar em production
 RUN npm ci --only=production && npm cache clean --force
 
 # Copiar o resto dos arquivos da aplicação
@@ -53,10 +54,12 @@ EXPOSE 3000
 # Variáveis de ambiente padrão
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV NODE_OPTIONS=--tls-min-v1.2
 
 # Healthcheck para verificar se a aplicação está rodando
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 1
 
-# Comando para iniciar a aplicação (usando node diretamente para evitar problemas com npm)
-CMD ["sh", "-c", "cross-env NODE_OPTIONS=--tls-min-v1.2 node server.js"]
+# Comando para iniciar a aplicação
+# Usar node diretamente com NODE_OPTIONS já definido no ENV (mais confiável que cross-env)
+CMD ["node", "server.js"]
