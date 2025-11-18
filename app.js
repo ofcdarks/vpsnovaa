@@ -686,35 +686,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         panel.style.display = 'block';
-        const { current, total, message, error } = status;
+        const { current, total, message, error, status: jobStatus, partDownloads } = status;
         const progress = total > 0 ? Math.round((current / total) * 100) : 0;
         const isComplete = current === total && total > 0;
 
         let title, titleColor, progressBarColor, showErrorDetails = false;
-        if (error) {
-            // Detectar tipo de erro para título mais específico
-            if (message.includes('Quota') || message.includes('quota') || message.includes('Limite')) {
-                title = '⚠️ Limite da API Atingido';
-                titleColor = 'text-orange-600 dark:text-orange-400';
-                progressBarColor = 'bg-orange-500';
-                showErrorDetails = true;
-            } else if (message.includes('indisponível') || message.includes('502') || message.includes('503')) {
-                title = '⚠️ Servidor Indisponível';
-                titleColor = 'text-yellow-600 dark:text-yellow-400';
-                progressBarColor = 'bg-yellow-500';
-            } else if (message.includes('conexão') || message.includes('rede')) {
-                title = '📡 Erro de Conexão';
-                titleColor = 'text-yellow-600 dark:text-yellow-400';
-                progressBarColor = 'bg-yellow-500';
-            } else if (message.includes('chave') || message.includes('API')) {
-                title = '🔑 Erro de Autenticação';
-                titleColor = 'text-red-600 dark:text-red-400';
-                progressBarColor = 'bg-red-500';
-            } else {
-                title = '❌ Erro na Narração';
-                titleColor = 'text-red-600 dark:text-red-400';
-                progressBarColor = 'bg-red-500';
-            }
+        const isPartial = jobStatus === 'partial' || (message && message.includes('partes já geradas'));
+        const isQuotaError = message && (message.includes('Quota') || message.includes('quota') || message.includes('Limite') || message.includes('limite ZERO'));
+        
+        if (error && !isPartial && isQuotaError) {
+            title = '⚠️ Limite da API Atingido';
+            titleColor = 'text-orange-600 dark:text-orange-400';
+            progressBarColor = 'bg-orange-500';
+            showErrorDetails = true;
+        } else if (error && !isPartial && (message.includes('indisponível') || message.includes('502') || message.includes('503'))) {
+            title = '⚠️ Servidor Indisponível';
+            titleColor = 'text-yellow-600 dark:text-yellow-400';
+            progressBarColor = 'bg-yellow-500';
+        } else if (error && !isPartial && (message.includes('conexão') || message.includes('rede'))) {
+            title = '📡 Erro de Conexão';
+            titleColor = 'text-yellow-600 dark:text-yellow-400';
+            progressBarColor = 'bg-yellow-500';
+        } else if (error && !isPartial && (message.includes('chave') || message.includes('API'))) {
+            title = '🔑 Erro de Autenticação';
+            titleColor = 'text-red-600 dark:text-red-400';
+            progressBarColor = 'bg-red-500';
+        } else if (error && !isPartial) {
+            title = '❌ Erro na Narração';
+            titleColor = 'text-red-600 dark:text-red-400';
+            progressBarColor = 'bg-red-500';
+        } else if (isPartial) {
+            title = '⚠️ Geração Parcial';
+            titleColor = 'text-yellow-600 dark:text-yellow-400';
+            progressBarColor = 'bg-yellow-500';
         } else if (isComplete) {
             title = '✅ Narração Concluída';
             titleColor = 'text-green-600 dark:text-green-400';
@@ -726,12 +730,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Formatar mensagem para melhor exibição
-        let formattedMessage = message;
+        let formattedMessage = message || '';
         let additionalInfo = '';
         
-        if (showErrorDetails && message.includes('\n')) {
+        if (showErrorDetails && formattedMessage.includes('\n')) {
             // Se tiver quebras de linha, dividir em mensagem principal e detalhes
-            const parts = message.split('\n\n');
+            const parts = formattedMessage.split('\n\n');
             formattedMessage = parts[0];
             if (parts.length > 1) {
                 additionalInfo = `
@@ -742,20 +746,216 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        panel.innerHTML = `
-            <h4 class="font-bold text-sm mb-2 ${titleColor}">
-                ${title}
-                <button class="float-right text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" onclick="document.getElementById('voice-gen-progress-panel').style.display = 'none';">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
-                </button>
-            </h4>
-            <p class="text-xs text-gray-700 dark:text-gray-300 mb-2 ${showErrorDetails ? '' : 'truncate'}" title="${message}">${formattedMessage}</p>
-            ${additionalInfo}
-            <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mt-2">
-                <div class="h-2 rounded-full ${progressBarColor}" style="width: ${progress}%;"></div>
-            </div>
-            <p class="text-right text-xs text-gray-500 dark:text-gray-400 mt-1">${progress}% (${current}/${total})</p>
-        `;
+        // Atualização incremental - verificar se já existe estrutura básica
+        let existingHeader = panel.querySelector('h4');
+        let needsFullRender = !existingHeader;
+        
+        if (needsFullRender) {
+            panel.innerHTML = `
+                <h4 class="font-bold text-sm mb-2 ${titleColor}">
+                    <span class="title-text">${title}</span>
+                    <button class="close-panel-btn float-right text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                    </button>
+                </h4>
+                <p class="message-text text-xs text-gray-700 dark:text-gray-300 mb-2 ${showErrorDetails ? '' : 'truncate'}" title="${message}">${formattedMessage}</p>
+                <div class="additional-info-container"></div>
+                <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mt-2">
+                    <div class="progress-bar h-2 rounded-full ${progressBarColor}" style="width: ${progress}%;"></div>
+                </div>
+                <p class="progress-text text-right text-xs text-gray-500 dark:text-gray-400 mt-1">${progress}% (${current}/${total})</p>
+                <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600" id="parts-container">
+                    <p class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">Partes Disponíveis:</p>
+                    <div class="space-y-2 max-h-60 overflow-y-auto" id="parts-list"></div>
+                </div>
+            `;
+            
+            // Adicionar event listener ao botão de fechar
+            const closeBtn = panel.querySelector('.close-panel-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    panel.style.display = 'none';
+                });
+            }
+        } else {
+            // Atualizar apenas o que mudou
+            const titleEl = panel.querySelector('.title-text');
+            if (titleEl) titleEl.textContent = title;
+            
+            existingHeader.className = `font-bold text-sm mb-2 ${titleColor}`;
+            
+            const messageEl = panel.querySelector('.message-text');
+            if (messageEl) {
+                messageEl.textContent = formattedMessage;
+                messageEl.title = message;
+                messageEl.className = `message-text text-xs text-gray-700 dark:text-gray-300 mb-2 ${showErrorDetails ? '' : 'truncate'}`;
+            }
+            
+            const additionalInfoContainer = panel.querySelector('.additional-info-container');
+            if (additionalInfoContainer) {
+                additionalInfoContainer.innerHTML = additionalInfo;
+            }
+            
+            const progressBar = panel.querySelector('.progress-bar');
+            if (progressBar) {
+                progressBar.className = `progress-bar h-2 rounded-full ${progressBarColor}`;
+                progressBar.style.width = `${progress}%`;
+            }
+            
+            const progressText = panel.querySelector('.progress-text');
+            if (progressText) {
+                progressText.textContent = `${progress}% (${current}/${total})`;
+            }
+        }
+        
+        // Atualizar partes disponíveis (mesmo código anterior para partes)
+        const partsList = panel.querySelector('#parts-list');
+        if (partsList && partDownloads && Array.isArray(partDownloads) && partDownloads.length > 0) {
+            const availableParts = partDownloads.filter(p => p && p.available);
+            
+            availableParts.forEach(part => {
+                const existingPart = partsList.querySelector(`[data-part-number="${part.partNumber}"]`);
+                if (!existingPart) {
+                    // Adicionar nova parte (código anterior)
+                    const partDiv = document.createElement('div');
+                    partDiv.className = 'flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600';
+                    partDiv.setAttribute('data-part-number', part.partNumber);
+                    partDiv.innerHTML = `
+                        <div class="flex-1 min-w-0">
+                            <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Parte ${part.partNumber}</p>
+                            <audio controls class="w-full h-8" preload="none" data-part-url="${part.downloadUrl}" data-part-number="${part.partNumber}">
+                                Seu navegador não suporta o elemento de áudio.
+                            </audio>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <button class="download-part-btn text-xs px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors cursor-pointer flex items-center gap-1"
+                               data-download-url="${part.downloadUrl}"
+                               data-part-number="${part.partNumber}"
+                               title="Baixar parte ${part.partNumber}">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Baixar
+                            </button>
+                            <button class="remove-part-btn text-xs px-2 py-1 bg-red-500 hover:bg-red-600 text-white rounded transition-colors cursor-pointer flex items-center gap-1"
+                               data-part-number="${part.partNumber}"
+                               title="Remover parte ${part.partNumber}">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Excluir
+                            </button>
+                        </div>
+                    `;
+                    partsList.appendChild(partDiv);
+                    
+                    // Configurar event listeners para os botões da nova parte
+                    if (window.setupPartButtonListeners) {
+                        setupPartButtonListeners(partDiv);
+                    }
+                    
+                    // Configurar player de áudio para a nova parte (código anterior)
+                    const audioElement = partDiv.querySelector('audio');
+                    if (audioElement) {
+                        const downloadUrl = audioElement.getAttribute('data-part-url');
+                        const partNumber = part.partNumber;
+                        
+                        console.log(`🎵 Configurando player de áudio para parte ${partNumber}`);
+                        
+                        const loadAudio = async () => {
+                            console.log(`🎵 loadAudio chamado para parte ${partNumber}`);
+                            console.log(`🎵 audioElement.src = "${audioElement.src}"`);
+                            console.log(`🎵 audioElement.dataset.loading = "${audioElement.dataset.loading}"`);
+                            
+                            if (audioElement.src && audioElement.src !== '' && audioElement.src.startsWith('blob:')) {
+                                console.log(`🎵 Áudio já carregado para parte ${partNumber}`);
+                                return;
+                            }
+                            
+                            if (audioElement.dataset.loading === 'true') {
+                                console.log(`🎵 Áudio já está sendo carregado para parte ${partNumber}`);
+                                return;
+                            }
+                            
+                            try {
+                                audioElement.dataset.loading = 'true';
+                                const token = localStorage.getItem('authToken');
+                                if (!token) {
+                                    addToLog('Você precisa estar autenticado para reproduzir o áudio.', true);
+                                    audioElement.dataset.loading = 'false';
+                                    return;
+                                }
+                                
+                                audioElement.style.opacity = '0.6';
+                                audioElement.style.pointerEvents = 'none';
+                                
+                                console.log(`🎵 Buscando áudio da parte ${partNumber} de ${downloadUrl}`);
+                                
+                                const response = await fetch(downloadUrl, {
+                                    method: 'GET',
+                                    headers: {
+                                        'Authorization': `Bearer ${token}`
+                                    }
+                                });
+                                
+                                console.log(`🎵 Resposta recebida: ${response.status}`);
+                                
+                                if (response.ok) {
+                                    const blob = await response.blob();
+                                    const blobUrl = window.URL.createObjectURL(blob);
+                                    audioElement.src = blobUrl;
+                                    audioElement.load();
+                                    audioElement.style.opacity = '1';
+                                    audioElement.style.pointerEvents = 'auto';
+                                    console.log(`✅ Áudio carregado com sucesso para parte ${partNumber}`);
+                                    
+                                    const cleanup = () => {
+                                        window.URL.revokeObjectURL(blobUrl);
+                                        audioElement.removeEventListener('removed', cleanup);
+                                    };
+                                    audioElement.addEventListener('removed', cleanup);
+                                } else {
+                                    audioElement.style.opacity = '1';
+                                    audioElement.style.pointerEvents = 'auto';
+                                    addToLog(`Erro ao carregar áudio da parte ${partNumber}: ${response.status}`, true);
+                                }
+                                audioElement.dataset.loading = 'false';
+                            } catch (error) {
+                                console.error(`❌ Erro ao carregar áudio da parte ${partNumber}:`, error);
+                                audioElement.style.opacity = '1';
+                                audioElement.style.pointerEvents = 'auto';
+                                addToLog(`Erro ao carregar áudio: ${error.message}`, true);
+                                audioElement.dataset.loading = 'false';
+                            }
+                        };
+                        
+                        // Tentar carregar ao interagir com o player
+                        audioElement.addEventListener('play', function(e) {
+                            console.log(`🎵 Evento 'play' disparado para parte ${partNumber}`);
+                            if (!this.src || this.src === '' || !this.src.startsWith('blob:')) {
+                                console.log(`🎵 Src vazio ou não é blob, carregando...`);
+                                e.preventDefault(); // Prevenir play até carregar
+                                loadAudio().then(() => {
+                                    if (this.src && this.src.startsWith('blob:')) {
+                                        console.log(`🎵 Tentando play novamente após carregar...`);
+                                        this.play().catch(err => console.error('Erro ao dar play:', err));
+                                    }
+                                });
+                            }
+                        });
+                        
+                        // Também tentar carregar quando clicar em qualquer lugar do player
+                        audioElement.addEventListener('click', function(e) {
+                            console.log(`🎵 Clique no player da parte ${partNumber}`);
+                            if (!this.src || this.src === '' || !this.src.startsWith('blob:')) {
+                                console.log(`🎵 Src vazio, carregando ao clicar...`);
+                                loadAudio();
+                            }
+                        }, { capture: true });
+                    }
+                }
+            });
+        }
     };
 
     const base64ToUint8Array = (base64) => {
@@ -6242,7 +6442,9 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                             current: statusRes.progress,
                             total: statusRes.total,
                             message: statusRes.message,
-                            error: statusRes.status === 'failed'
+                            error: statusRes.status === 'failed',
+                            status: statusRes.status,
+                            partDownloads: statusRes.partDownloads || []
                         };
                         renderVoiceGenerationProgress(appState.voiceGenStatus);
 
