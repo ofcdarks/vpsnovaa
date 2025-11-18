@@ -37,6 +37,52 @@ document.addEventListener('DOMContentLoaded', () => {
         return model.toLowerCase().replace(/_/g, '-').replace(/\s+/g, '').trim();
     };
 
+    // Modelo recomendado padrão (mais estável e confiável)
+    const RECOMMENDED_MODEL = 'gpt-4o';
+    
+    // Função helper para fazer requisição com fallback automático para modelo recomendado
+    const apiRequestWithFallback = async (url, method, data, retries = 1) => {
+        const originalModel = data.model;
+        let lastError = null;
+        
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const result = await apiRequest(url, method, data);
+                // Se foi usado modelo diferente do original e funcionou, avisar
+                if (attempt > 0 && data.model !== originalModel) {
+                    console.log(`✅ Requisição bem-sucedida usando modelo recomendado: ${data.model} (original: ${originalModel})`);
+                }
+                return result;
+            } catch (error) {
+                lastError = error;
+                const errorMsg = error.message || '';
+                
+                // Verificar se é um erro que justifica fallback
+                const shouldFallback = errorMsg.includes('MAX_TOKENS') || 
+                                      errorMsg.includes('vazia ou malformada') ||
+                                      errorMsg.includes('cortada') ||
+                                      errorMsg.includes('limite de tokens') ||
+                                      errorMsg.includes('context_length_exceeded') ||
+                                      (errorMsg.includes('JSON') && attempt === 0);
+                
+                // Se deve fazer fallback e ainda não tentou o recomendado
+                if (shouldFallback && attempt < retries && data.model !== RECOMMENDED_MODEL) {
+                    console.warn(`⚠️ Erro com modelo ${data.model}: ${errorMsg.substring(0, 100)}`);
+                    console.log(`🔄 Tentando automaticamente com modelo recomendado: ${RECOMMENDED_MODEL}`);
+                    data.model = RECOMMENDED_MODEL;
+                    // Pequeno delay antes de tentar novamente
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    continue;
+                }
+                
+                // Se não deve fazer fallback ou já tentou tudo, lança o erro
+                throw error;
+            }
+        }
+        
+        throw lastError;
+    };
+    
     // Smart Matching entre modelo pedido e dataset de limites
     const getTokenLimitsFrontend = (model) => {
         const m = normalizeModelName(model);
@@ -581,9 +627,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span>Progresso por Partes</span>
                             <span>Parte ${safeChunkCurrent}/${chunkTotal}</span>
                         </div>
-                        <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+            <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
                             <div class="h-2 rounded-full bg-indigo-500 transition-all duration-300" style="width: ${chunkPercent}%;"></div>
-                        </div>
+            </div>
                     </div>
                 ` : ''}
             </div>
@@ -2344,7 +2390,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const scoreSchema = { type: "OBJECT", properties: { retention_potential: { type: "NUMBER" }, clarity_score: { type: "NUMBER" }, viral_potential: { type: "NUMBER" } } };
 
         try {
-            const scoreResult = await apiRequest('/api/generate', 'POST', { prompt: scorePrompt, model, schema: scoreSchema });
+            const scoreResult = await apiRequestWithFallback('/api/generate', 'POST', { prompt: scorePrompt, model, schema: scoreSchema });
             if (scoreResult.data) {
                 if (!scoreResult.data) scoreResult.data = {};
                 const scoreKeys = ['retention_potential', 'clarity_score', 'viral_potential'];
@@ -2751,7 +2797,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const result = await apiRequest('/api/generate', 'POST', { prompt, model, schema });
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { prompt, model, schema });
                 if (result.data && result.data.ideas && result.data.ideas.length > 0) {
                     result.data.ideas.forEach(idea => {
                         if (!idea.scores) idea.scores = {};
@@ -2849,7 +2895,7 @@ ${removeAccents(prompts)}`;
             if (outputEl) outputEl.innerHTML = '';
 
             try {
-                const result = await apiRequest('/api/generate', 'POST', { prompt, model, maxOutputTokens: 6000, temperature: 0.4 });
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { prompt, model, maxOutputTokens: 6000, temperature: 0.4 });
                 if (result.data && result.data.text) {
                     if (outputEl) {
                         outputEl.innerHTML = `
@@ -3049,7 +3095,7 @@ SAIDA: Use "[--PART N: TITULO--]" no inicio e "[--ENDPART--]" no final de cada p
 REGRA CRITICA: Comece DIRETAMENTE com [--PART 1: ... --] (ou narracao pura se voice-over). Sem introducoes.
 
 FORMULA OBRIGATORIA (SIGA TODAS AS INSTRUCOES):
-${removeAccents(formulaContent)}
+            ${removeAccents(formulaContent)}
 
 IMPORTANTE: Voce DEVE seguir TODAS as instrucoes da formula acima. Nao pule nenhuma etapa, nao resuma, nao modifique a estrutura. A formula e OBRIGATORIA.
 
@@ -3287,7 +3333,7 @@ ${removeAccents(final_check_instruction)}`;
                 if (!reviewerResults.originalScores) {
                     const scorePrompt = `Analise roteiro. Atribua 0-100 para retention_potential, clarity_score, viral_potential. ${corePrinciples}${langContext}${durationContext} Criterios: retention (ganchos, ritmo), clarity (compreensao), viral (compartilhamento). JSON apenas.\n\nROTEIRO:\n"""${removeAccents(scriptText)}"""`;
                     const scoreSchema = { type: "OBJECT", properties: { retention_potential: { type: "NUMBER" }, clarity_score: { type: "NUMBER" }, viral_potential: { type: "NUMBER" } }, required: ["retention_potential", "clarity_score", "viral_potential"] };
-                    scoreResultPromise = apiRequest('/api/generate', 'POST', { prompt: scorePrompt, model, schema: scoreSchema });
+                    scoreResultPromise = apiRequestWithFallback('/api/generate', 'POST', { prompt: scorePrompt, model, schema: scoreSchema });
                 } else {
                     // Se já temos pontuações, criar uma Promise resolvida
                     console.log('Usando pontuações importadas:', reviewerResults.originalScores);
@@ -3329,7 +3375,7 @@ ${removeAccents(final_check_instruction)}`;
                         }
                     };
                 }
-                const suggestionPromise = apiRequest('/api/generate', 'POST', { prompt: suggestionPrompt, model, schema: suggestionSchema });
+                const suggestionPromise = apiRequestWithFallback('/api/generate', 'POST', { prompt: suggestionPrompt, model, schema: suggestionSchema });
 
                 const [scoreResponse, suggestionResponse] = await Promise.all([scoreResultPromise, suggestionPromise]);
 
@@ -3776,7 +3822,7 @@ TEXTO ATUAL:
 """${removeAccents(part.part_content)}"""`;
                         
                         try {
-                            const expansionResult = await apiRequest('/api/generate', 'POST', {
+                            const expansionResult = await apiRequestWithFallback('/api/generate', 'POST', {
                                 prompt: expansionPrompt,
                                 model,
                                 maxOutputTokens: 2048,
@@ -3869,7 +3915,7 @@ ${removeAccents(manualInstruction)}
 ROTEIRO (${originalWords} palavras):
 """${removeAccents(scriptToRevise)}"""`;
                 
-                const result = await apiRequest('/api/generate', 'POST', { 
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { 
                     prompt, 
                     model,
                     maxOutputTokens: 8192
@@ -3936,7 +3982,7 @@ ROTEIRO (${originalWords} palavras):
 ROTEIRO:
 """${removeAccents(finalRevisedText)}"""`;
                         
-                        const retryResult = await apiRequest('/api/generate', 'POST', { 
+                        const retryResult = await apiRequestWithFallback('/api/generate', 'POST', { 
                             prompt: retryPrompt, 
                             model,
                             maxOutputTokens: 8192
@@ -4072,7 +4118,7 @@ ROTEIRO:
             }
             try {
                 showProgressModal('A gerar conteudo...', 'A comunicar com a IA...');
-                const result = await apiRequest('/api/generate', 'POST', { prompt, model, schema });
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { prompt, model, schema });
                 hideProgressModal();
 
                 const dataToRender = model.startsWith('gpt-') ? result.data.titles || result.data.structures : result.data;
@@ -4354,7 +4400,7 @@ TRECHO:
                         while (retries > 0 && !success) {
                             try {
                                 console.log(`📤 Enviando requisição para API: modelo="${model}"`);
-                                const result = await apiRequest('/api/generate', 'POST', { 
+                                const result = await apiRequestWithFallback('/api/generate', 'POST', { 
                                     prompt, 
                                     model, 
                                     schema,
@@ -4572,7 +4618,7 @@ TRECHO FOCAL:
                             while (retries > 0) {
                                 try {
                                     console.log(`📤 Enviando chunk ${chunkIndex + 1} para API: modelo="${model}"`);
-                                    const chunkResult = await apiRequest('/api/generate', 'POST', { 
+                                    const chunkResult = await apiRequestWithFallback('/api/generate', 'POST', { 
                                         prompt: chunkPrompt, 
                                         model, 
                                         schema: chunkSchema,
@@ -4653,7 +4699,7 @@ TRECHO FOCAL:
                                         
                                         try {
                                             const reducedBaseTokensPerScene = isFlash ? 800 : (isPro ? 600 : (isFlashLite ? 500 : 500));
-                                            const reducedResult = await apiRequest('/api/generate', 'POST', { 
+                                            const reducedResult = await apiRequestWithFallback('/api/generate', 'POST', { 
                                                 prompt: reducedPrompt, 
                                                 model, 
                                                 schema: chunkSchema,
@@ -4745,27 +4791,27 @@ TRECHO FOCAL:
                         appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s) (calculado: ${exactSceneCount}).`;
                         renderSceneGenerationProgress(appState.sceneGenStatus);
                     } else {
-                        let schema;
-                        let prompt;
-                        if (model.startsWith('gpt-')) {
-                            schema = {
-                                type: "OBJECT",
-                                properties: {
-                                    scenes: {
-                                        type: "ARRAY",
-                                        items: {
-                                            type: "OBJECT",
-                                            properties: {
-                                                scene_description: { type: "STRING" },
-                                                prompt_text: { type: "STRING" },
-                                                original_text: { type: "STRING" }
-                                            },
-                                            required: ["scene_description", "prompt_text", "original_text"]
-                                        }
+                    let schema;
+                    let prompt;
+                    if (model.startsWith('gpt-')) {
+                        schema = {
+                            type: "OBJECT",
+                            properties: {
+                                scenes: {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            scene_description: { type: "STRING" },
+                                            prompt_text: { type: "STRING" },
+                                            original_text: { type: "STRING" }
+                                        },
+                                        required: ["scene_description", "prompt_text", "original_text"]
                                     }
-                                },
-                                required: ["scenes"]
-                            };
+                                }
+                            },
+                            required: ["scenes"]
+                        };
                             prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
 
 CRITICO - FORMATO JSON OBRIGATORIO:
@@ -4779,19 +4825,19 @@ CRITICO - FORMATO JSON OBRIGATORIO:
 
 ROTEIRO:
 """${removeAccents(text)}"""`;
-                        } else {
-                            schema = {
-                                type: "ARRAY",
-                                items: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        scene_description: { type: "STRING" },
-                                        prompt_text: { type: "STRING" },
-                                        original_text: { type: "STRING" }
-                                    },
-                                    required: ["scene_description", "prompt_text", "original_text"]
-                                }
-                            };
+                    } else {
+                        schema = {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    scene_description: { type: "STRING" },
+                                    prompt_text: { type: "STRING" },
+                                    original_text: { type: "STRING" }
+                                },
+                                required: ["scene_description", "prompt_text", "original_text"]
+                            }
+                        };
                             prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
 
 CRITICO - FORMATO JSON OBRIGATORIO:
@@ -4821,7 +4867,7 @@ ROTEIRO:
                         while (retries > 0) {
                             try {
                                 console.log(`📤 Enviando requisição completa para API: modelo="${model}"`);
-                                result = await apiRequest('/api/generate', 'POST', { 
+                                result = await apiRequestWithFallback('/api/generate', 'POST', { 
                                     prompt, 
                                     model, 
                                     schema,
@@ -4908,14 +4954,14 @@ ROTEIRO:
                         } else if (scenesData.length < exactSceneCount) {
                             addToLog(`⚠️ Aviso: Foram geradas ${scenesData.length} cenas, mas ${exactSceneCount} foram calculadas.`, true);
                         }
-                        
-                        scenePromptResults.data.push(...scenesData);
-                        scenePromptResults.total_prompts = scenePromptResults.data.length;
-                        appState.sceneGenStatus.current = scenePromptResults.data.length;
+                    
+                    scenePromptResults.data.push(...scenesData);
+                    scenePromptResults.total_prompts = scenePromptResults.data.length;
+                    appState.sceneGenStatus.current = scenePromptResults.data.length;
                         appState.sceneGenStatus.total = exactSceneCount;
                         appState.sceneGenStatus.subMessage = `Roteiro dividido automaticamente (${scenePromptResults.data.length}/${exactSceneCount} cenas).`;
                         appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s) (calculado: ${exactSceneCount}).`;
-                        renderSceneGenerationProgress(appState.sceneGenStatus);
+                    renderSceneGenerationProgress(appState.sceneGenStatus);
                     }
                 }
 
@@ -5025,7 +5071,7 @@ ${scriptText}
             };
 
             try {
-                const result = await apiRequest('/api/generate', 'POST', { 
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { 
                     prompt, 
                     model, 
                     schema,
@@ -5171,7 +5217,7 @@ ${scriptText}
             }
             try {
                 showProgressModal('A gerar prompts de thumbnail...');
-                const result = await apiRequest('/api/generate', 'POST', {prompt, model, schema});
+                const result = await apiRequestWithFallback('/api/generate', 'POST', {prompt, model, schema});
                 hideProgressModal();
 
                 const dataToRender = model.startsWith('gpt-') ? result.data.prompts : result.data;
@@ -5394,8 +5440,8 @@ ${scriptText}
                         updateProgress();
                     };
 
-                            await runTasksWithConcurrency(tasks, 3, processTask);
-                            
+                    await runTasksWithConcurrency(tasks, 3, processTask);
+
                             // Se foi cancelado, parar aqui
                             if (appState.imageGenStatus.cancelled) {
                                 appState.imageGenStatus.active = false;
@@ -5416,7 +5462,7 @@ ${scriptText}
                             if (appState.imageGenStatus.cancelled) {
                                 appState.imageGenStatus.active = false;
                                 appState.imageGenStatus.message = 'Geração cancelada pelo usuário.';
-                                renderImageGenerationProgress(appState.imageGenStatus);
+                            renderImageGenerationProgress(appState.imageGenStatus);
                                 addToLog('Geração de imagens cancelada pelo usuário.', false);
                                 break;
                             }
@@ -5863,7 +5909,7 @@ ${scriptText}
             }
 
             try {
-                const result = await apiRequest('/api/generate', 'POST', { prompt, model, schema });
+                const result = await apiRequestWithFallback('/api/generate', 'POST', { prompt, model, schema });
                 
                 if (!result.data) {
                     throw new Error("A resposta da IA esta vazia ou em formato incorreto.");
@@ -5922,11 +5968,26 @@ ${scriptText}
             showProgressModal("Analisando vídeo...", "A IA está a buscar detalhes e gerar otimizações...");
         
             try {
-                // 1. Fetch YouTube video details
-                const videoDetails = await apiRequest('/api/youtube/details-v3', 'POST', { url: videoUrl });
+                // 1. Fetch YouTube video details (com fallback automático para GPT-4 se não tiver API do YouTube)
+                let videoDetails;
+                try {
+                    videoDetails = await apiRequest('/api/youtube/details-v3', 'POST', { url: videoUrl });
+                } catch (error) {
+                    // Se falhar, tenta novamente (o backend já faz fallback para GPT-4)
+                    throw new Error(`Não foi possível obter os detalhes do vídeo: ${error.message || 'Erro desconhecido'}`);
+                }
         
                 if (!videoDetails || !videoDetails.title) {
-                    throw new Error("Não foi possível obter os detalhes do vídeo do YouTube. Verifique a URL e sua chave de API.");
+                    throw new Error("Não foi possível obter os detalhes do vídeo do YouTube. Verifique a URL e tente novamente.");
+                }
+                
+                // Informar ao usuário sobre o método usado
+                if (videoDetails.source === 'scraping_gpt4') {
+                    console.log("ℹ️ Dados extraídos via scraping + GPT-4 (sem API do YouTube)");
+                    addToLog("ℹ️ Dados extraídos via scraping e IA - algumas estatísticas podem ser estimadas", false);
+                } else if (videoDetails.source === 'gpt4_estimation') {
+                    console.log("ℹ️ Dados estimados usando GPT-4 (sem API do YouTube)");
+                    addToLog("ℹ️ Dados estimados usando IA (GPT-4) - algumas informações podem não estar disponíveis", false);
                 }
         
                 // 2. Generate optimization suggestions using AI
@@ -5954,7 +6015,7 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                     required: ["original_title", "original_description", "original_tags", "original_scores", "suggested_titles", "suggested_description", "suggested_tags", "new_scores"]
                 };
         
-                const aiResult = await apiRequest('/api/generate', 'POST', { prompt: optimizationPrompt, model, schema: optimizationSchema });
+                const aiResult = await apiRequestWithFallback('/api/generate', 'POST', { prompt: optimizationPrompt, model, schema: optimizationSchema });
         
                 if (!aiResult.data) {
                     throw new Error("A IA não retornou sugestões de otimização válidas.");
@@ -6053,7 +6114,7 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             const script = scriptInput?.value.trim();
             const voice = voiceSelect?.value;
             const ttsModel = modelSelect?.value || 'gemini-2.5-pro-preview-tts'; // Fallback
-            const provider = providerSelect?.value || 'gemini';
+            const provider = providerSelect?.value || 'openai'; // OpenAI como padrão (melhor qualidade)
             const style = styleInstructions?.value.trim();
 
             if (!script || !voice) {
@@ -6141,7 +6202,7 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             const previewPlayer = document.getElementById('tts-preview-player');
             const voice = document.getElementById('tts-voice-select').value;
             const model = document.getElementById('tts-model-select')?.value || 'gemini-2.5-pro-preview-tts';
-            const provider = document.getElementById('tts-provider-select')?.value || 'gemini';
+            const provider = document.getElementById('tts-provider-select')?.value || 'openai'; // OpenAI como padrão (melhor qualidade)
 
             if (!voice) {
                 showSuccessToast('Por favor, selecione uma voz para testar.');
@@ -6204,19 +6265,22 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             </optgroup>
         `;
 
-        const geminiModelOptions = `
-            <optgroup label="Google Gemini">
-                <option value="gemini-2.5-pro" selected>Gemini 2.5 Pro</option>
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+        // Modelo recomendado: GPT-4o (mais estável e confiável)
+        const RECOMMENDED_MODEL = 'gpt-4o';
+
+        const gptModelOptions = `
+            <optgroup label="OpenAI GPT (Recomendado)">
+                <option value="gpt-4o" selected>⭐ GPT-4o (Recomendado)</option>
+                <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
             </optgroup>
         `;
 
-        const gptModelOptions = `
-            <optgroup label="OpenAI GPT">
-                <option value="gpt-4o">GPT-4o</option>
-                <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+        const geminiModelOptions = `
+            <optgroup label="Google Gemini">
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
             </optgroup>
         `;
 
@@ -6233,10 +6297,11 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             'video-optimizer-model-select'
         ];
 
+        // Ordem: GPT primeiro (recomendado), depois Claude, depois Gemini
         modelSelectIds.forEach(id => {
             const selectEl = mainContent.querySelector(`#${id}`);
             if (selectEl) {
-                selectEl.innerHTML = claudeModelOptions + geminiModelOptions + gptModelOptions;
+                selectEl.innerHTML = gptModelOptions + claudeModelOptions + geminiModelOptions;
             }
         });
 

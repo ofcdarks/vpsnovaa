@@ -731,7 +731,7 @@ const mapSegmentsToSpeechConfig = (segments = []) => {
   return { speakerVoiceMap, normalizedSegments };
 };
 
-const buildTtsPrompt = (styleInstructions = '', segments = []) => {
+const buildTtsPrompt = (styleInstructions = '', segments = [], skipSpeakerPrefix = false) => {
   const lines = [];
   // A instrução de estilo não deve ser incluída no texto para TTS,
   // pois o modelo tentará lê-la. O estilo é inferido da voz selecionada.
@@ -739,6 +739,12 @@ const buildTtsPrompt = (styleInstructions = '', segments = []) => {
   segments.forEach((segment, index) => {
     const text = typeof segment?.text === 'string' ? segment.text.trim() : '';
     if (!text) return;
+
+    // Se skipSpeakerPrefix for true, retorna apenas o texto sem prefixo de speaker
+    if (skipSpeakerPrefix) {
+      lines.push(text);
+      return;
+    }
 
     const speaker = typeof segment?.speaker === 'string' && segment.speaker.trim()
       ? segment.speaker.trim()
@@ -1814,20 +1820,38 @@ app.post('/api/generate', verifyToken, async (req, res) => {
                     generationConfig
                  }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
                  
-                 // Verificar se há bloqueios de segurança
+                 // Verificar se há bloqueios de segurança ou MAX_TOKENS
                  if (response.data.candidates && response.data.candidates.length > 0) {
                      const candidate = response.data.candidates[0];
                      if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
                          throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
                      }
+                     
+                     // Tratar MAX_TOKENS - resposta foi cortada
+                     if (candidate.finishReason === 'MAX_TOKENS') {
+                         const text = candidate.content?.parts?.[0]?.text;
+                         if (text && text.trim().length > 0) {
+                             // Tentar parsear mesmo que incompleto
+                             try {
+                                 aiResult = parseJsonRobustly(text, "Gemini");
+                                 console.warn(`⚠️ [Gemini] Resposta cortada por MAX_TOKENS, mas JSON parcial foi parseado. Considere reduzir o tamanho do prompt ou usar um modelo com mais tokens de saída.`);
+                             } catch (parseError) {
+                                 throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS). O prompt é muito longo ou a saída esperada excede o limite. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
+                             }
+                         } else {
+                             throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS) e está vazia. O prompt é muito longo. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
+                         }
+                     } else {
+                         const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+                         if (!text || text.trim().length === 0) {
+                             console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
+                             throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
+                         }
+                         aiResult = parseJsonRobustly(text, "Gemini");
+                     }
+                 } else {
+                     throw new Error('Resposta da API Gemini sem candidatos. Tente novamente.');
                  }
-                 
-                 const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-                 if (!text || text.trim().length === 0) {
-                     console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
-                     throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
-                 }
-                 aiResult = parseJsonRobustly(text, "Gemini");
              } else {
                  // Respeitar limite máximo de tokens de saída do modelo Gemini
                  generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
@@ -1837,20 +1861,34 @@ app.post('/api/generate', verifyToken, async (req, res) => {
                     generationConfig
                  }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
                  
-                 // Verificar se há bloqueios de segurança
+                 // Verificar se há bloqueios de segurança ou MAX_TOKENS
                  if (response.data.candidates && response.data.candidates.length > 0) {
                      const candidate = response.data.candidates[0];
                      if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
                          throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
                      }
+                     
+                     // Tratar MAX_TOKENS - resposta foi cortada
+                     if (candidate.finishReason === 'MAX_TOKENS') {
+                         const text = candidate.content?.parts?.[0]?.text;
+                         if (text && text.trim().length > 0) {
+                             // Retornar texto parcial com aviso
+                             aiResult = { text: text.trim() };
+                             console.warn(`⚠️ [Gemini] Resposta cortada por MAX_TOKENS. Considere usar um modelo diferente (recomendado: gpt-4o).`);
+                         } else {
+                             throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS) e está vazia. O prompt é muito longo. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
+                         }
+                     } else {
+                         const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+                         if (!text || text.trim().length === 0) {
+                             console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
+                             throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
+                         }
+                         aiResult = { text: text.trim() };
+                     }
+                 } else {
+                     throw new Error('Resposta da API Gemini sem candidatos. Tente novamente.');
                  }
-                 
-                 const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-                 if (!text || text.trim().length === 0) {
-                     console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
-                     throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
-                 }
-                 aiResult = { text: text.trim() };
              }
         }
         res.json({ data: aiResult, apiSource });
@@ -3343,7 +3381,8 @@ async function processScriptTtsJob(jobId, jobData) {
             const batchPromises = batch.map(async (chunk, batchIndex) => {
                 const globalIndex = batchStart + batchIndex;
                 
-                const textInput = buildTtsPrompt('', [{ speaker: 'Narrador', text: chunk }]);
+                // Não adiciona prefixo "Narrador:" - apenas o texto puro do roteiro
+                const textInput = buildTtsPrompt('', [{ speaker: 'Narrador', text: chunk }], true);
                 
                 let audioBase64 = null;
                 let lastError = null;
@@ -3781,38 +3820,229 @@ app.post('/api/youtube/details-v3', verifyToken, async (req, res) => { // Change
     try {
         const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
         const settings = JSON.parse(userSettingsRow?.settings || '{}');
-        const apiKey = getFirstGeminiKeyFromSettings(settings);
+        
+        // Tentar primeiro com API do YouTube (se disponível)
+        const youtubeApiKey = settings.youtube_api_key || process.env.YOUTUBE_API_KEY;
+        
+        if (youtubeApiKey && youtubeApiKey.trim() !== '') {
+            try {
+                const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${youtubeApiKey}`;
+                const { data } = await axios.get(apiUrl, { timeout: 10000 });
 
-        if (!apiKey) return res.status(400).json({ message: 'Chave da API Gemini (usada para o YouTube) não configurada. Por favor, adicione-a nas Configurações.' });
+                if (data.items && data.items.length > 0) {
+                    const video = data.items[0];
+                    const snippet = video.snippet;
+                    const statistics = video.statistics;
 
-        const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}`;
-        const { data } = await axios.get(apiUrl);
-
-        if (!data.items || data.items.length === 0) {
-            return res.status(404).json({ message: 'Vídeo não encontrado com o ID fornecido.' });
+                    return res.json({
+                        title: snippet.title,
+                        description: snippet.description,
+                        tags: snippet.tags || [],
+                        channelTitle: snippet.channelTitle,
+                        thumbnailUrl: snippet.thumbnails.maxres?.url || snippet.thumbnails.high?.url || snippet.thumbnails.medium?.url,
+                        viewCount: statistics.viewCount || '0',
+                        likeCount: statistics.likeCount || '0',
+                        commentCount: statistics.commentCount || '0',
+                        publishedAt: snippet.publishedAt,
+                        channelId: snippet.channelId,
+                        source: 'youtube_api'
+                    });
+                }
+            } catch (youtubeError) {
+                console.warn("⚠️ API do YouTube falhou, tentando com GPT-4:", youtubeError.message);
+                // Continua para fallback com GPT-4
+            }
+        }
+        
+        // Fallback: Usar GPT-4 para extrair dados do YouTube
+        console.log("🔄 Usando GPT-4 para extrair dados do YouTube (sem API do YouTube)");
+        
+        const gptKey = settings.openai_api_key || process.env.OPENAI_API_KEY;
+        if (!gptKey || gptKey.trim() === '') {
+            return res.status(400).json({ 
+                message: 'Chave da API do YouTube não configurada e chave GPT-4 também não encontrada. Por favor, configure pelo menos uma delas nas Configurações.' 
+            });
         }
 
-        const video = data.items[0];
-        const snippet = video.snippet;
-        const statistics = video.statistics;
+        // Tentar fazer scraping básico da página do YouTube primeiro
+        let scrapedData = null;
+        try {
+            // Fazer requisição HTTP para a página do YouTube e extrair dados básicos
+            const youtubePageResponse = await axios.get(`https://www.youtube.com/watch?v=${videoId}`, {
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            });
+            
+            const pageContent = youtubePageResponse.data;
+            
+            // Extrair título usando regex (padrão comum no HTML do YouTube)
+            const titleMatch = pageContent.match(/<title>([^<]+)<\/title>/i) || 
+                              pageContent.match(/"title":"([^"]+)"/i) ||
+                              pageContent.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+            
+            // Extrair descrição
+            const descMatch = pageContent.match(/"shortDescription":"([^"]+)"/i) ||
+                            pageContent.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+            
+            // Extrair nome do canal
+            const channelMatch = pageContent.match(/"ownerChannelName":"([^"]+)"/i) ||
+                               pageContent.match(/<link\s+itemprop="name"\s+content="([^"]+)"/i);
+            
+            if (titleMatch) {
+                scrapedData = {
+                    title: titleMatch[1].replace(/\s*-\s*YouTube$/, '').trim(),
+                    description: descMatch ? descMatch[1].substring(0, 5000) : 'Descrição não disponível',
+                    channelTitle: channelMatch ? channelMatch[1] : 'Canal desconhecido',
+                    tags: [],
+                    viewCount: 'N/A',
+                    likeCount: 'N/A',
+                    commentCount: 'N/A',
+                    publishedAt: 'N/A',
+                    channelId: 'N/A'
+                };
+                console.log("✅ Dados extraídos via scraping básico do YouTube");
+            }
+        } catch (scrapeError) {
+            console.warn("⚠️ Scraping básico falhou, usando GPT-4:", scrapeError.message);
+        }
+        
+        // Se scraping funcionou, usar GPT-4 apenas para melhorar/enriquecer os dados
+        // Se não funcionou, usar GPT-4 para fazer estimativa baseada no ID
+        const extractionPrompt = scrapedData 
+            ? `Você recebeu dados básicos extraídos de um vídeo do YouTube. Enriqueça e complete as informações faltantes:
 
+Dados já extraídos:
+- Título: ${scrapedData.title}
+- Descrição: ${scrapedData.description.substring(0, 500)}
+- Canal: ${scrapedData.channelTitle}
+
+ID do vídeo: ${videoId}
+URL: ${url}
+
+Complete as informações faltantes (tags, estatísticas estimadas) e melhore a descrição se necessário. Retorne APENAS JSON válido com todas as chaves.`
+            : `Você é um especialista em analisar vídeos do YouTube. Com base no ID do vídeo fornecido, faça uma estimativa inteligente das informações:
+
+ID do vídeo: ${videoId}
+URL: ${url}
+
+IMPORTANTE: Como não temos acesso direto à API, você deve fazer estimativas baseadas em padrões conhecidos. Use "N/A" para valores que não podem ser estimados.
+
+Retorne APENAS um objeto JSON válido com as seguintes chaves:
+{
+  "title": "título estimado baseado no ID (ou 'Título não disponível')",
+  "description": "descrição genérica ou estimada",
+  "tags": ["tag1", "tag2", "tag3"] ou [],
+  "channelTitle": "Canal desconhecido",
+  "viewCount": "N/A",
+  "likeCount": "N/A",
+  "commentCount": "N/A",
+  "publishedAt": "N/A",
+  "channelId": "N/A"
+}`;
+
+        const extractionSchema = {
+            type: "OBJECT",
+            properties: {
+                title: { type: "STRING" },
+                description: { type: "STRING" },
+                tags: { type: "ARRAY", items: { type: "STRING" } },
+                channelTitle: { type: "STRING" },
+                viewCount: { type: "STRING" },
+                likeCount: { type: "STRING" },
+                commentCount: { type: "STRING" },
+                publishedAt: { type: "STRING" },
+                channelId: { type: "STRING" }
+            },
+            required: ["title", "description"]
+        };
+
+        // Usar GPT-4 para extrair dados
+        const { getTokenLimits } = require('./token-limits');
+        const tokenLimits = getTokenLimits('gpt-4o');
+        
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o',
+            messages: [
+                {
+                    role: "system",
+                    content: "Você é um especialista em extrair informações de vídeos do YouTube. Retorne APENAS JSON válido, sem texto adicional."
+                },
+                {
+                    role: "user",
+                    content: extractionPrompt
+                }
+            ],
+            response_format: { type: "json_object" },
+            max_tokens: Math.min(2000, tokenLimits.maxOutputTokens),
+            temperature: 0.3
+        }, {
+            headers: { 
+                'Authorization': `Bearer ${gptKey}`, 
+                'Content-Type': 'application/json' 
+            },
+            timeout: 30000
+        });
+
+        const content = response.data.choices[0].message.content;
+        const extractedData = parseJsonRobustly(content, "GPT-4 YouTube Extraction");
+
+        // Combinar dados do scraping (se disponível) com dados do GPT-4
+        const finalData = scrapedData ? {
+            ...scrapedData,
+            // Sobrescrever com dados melhorados do GPT-4 se disponíveis
+            tags: Array.isArray(extractedData.tags) && extractedData.tags.length > 0 
+                ? extractedData.tags 
+                : scrapedData.tags,
+            description: extractedData.description && extractedData.description.length > scrapedData.description.length
+                ? extractedData.description
+                : scrapedData.description
+        } : {
+            title: extractedData.title || 'Título não disponível',
+            description: extractedData.description || 'Descrição não disponível',
+            tags: Array.isArray(extractedData.tags) ? extractedData.tags : [],
+            channelTitle: extractedData.channelTitle || 'Canal desconhecido',
+            viewCount: extractedData.viewCount || 'N/A',
+            likeCount: extractedData.likeCount || 'N/A',
+            commentCount: extractedData.commentCount || 'N/A',
+            publishedAt: extractedData.publishedAt || 'N/A',
+            channelId: extractedData.channelId || 'N/A'
+        };
+
+        // Garantir que temos pelo menos título
+        if (!finalData.title || finalData.title === 'Título não disponível') {
+            throw new Error('Não foi possível extrair o título do vídeo. Verifique se a URL está correta.');
+        }
+
+        // Normalizar dados finais
         res.json({
-            title: snippet.title,
-            description: snippet.description,
-            tags: snippet.tags || [],
-            channelTitle: snippet.channelTitle,
-            thumbnailUrl: snippet.thumbnails.maxres?.url || snippet.thumbnails.high?.url || snippet.thumbnails.medium?.url,
-            viewCount: statistics.viewCount,
-            likeCount: statistics.likeCount,
-            commentCount: statistics.commentCount,
-            publishedAt: snippet.publishedAt,
-            channelId: snippet.channelId,
+            title: finalData.title,
+            description: finalData.description || 'Descrição não disponível',
+            tags: Array.isArray(finalData.tags) ? finalData.tags : [],
+            channelTitle: finalData.channelTitle || 'Canal desconhecido',
+            thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+            viewCount: finalData.viewCount || 'N/A',
+            likeCount: finalData.likeCount || 'N/A',
+            commentCount: finalData.commentCount || 'N/A',
+            publishedAt: finalData.publishedAt || 'N/A',
+            channelId: finalData.channelId || 'N/A',
+            source: scrapedData ? 'scraping_gpt4' : 'gpt4_estimation'
         });
 
     } catch (error) {
-        console.error("Erro ao buscar detalhes do vídeo do YouTube via API:", error.response?.data || error.message);
-        const apiErrorMessage = error.response?.data?.error?.message || 'Erro desconhecido.';
-        res.status(500).json({ message: `Falha ao buscar dados da API do YouTube: ${apiErrorMessage}` });
+        console.error("Erro ao buscar detalhes do vídeo do YouTube:", error.response?.data || error.message);
+        
+        // Mensagem de erro mais amigável
+        if (error.message.includes('GPT-4 não conseguiu')) {
+            return res.status(500).json({ 
+                message: 'Não foi possível extrair os dados do vídeo. Verifique se a URL está correta e tente novamente. Se o problema persistir, configure a API do YouTube nas Configurações.' 
+            });
+        }
+        
+        return res.status(500).json({ 
+            message: `Erro ao buscar detalhes do vídeo: ${error.response?.data?.error?.message || error.message}` 
+        });
     }
 });
 
