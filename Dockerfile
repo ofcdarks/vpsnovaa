@@ -2,45 +2,47 @@
 FROM node:20-slim
 
 # Instalar dependências do sistema necessárias para FFmpeg, Sharp e outras bibliotecas nativas
+# FFmpeg é ESSENCIAL para juntar múltiplos arquivos de áudio em um único arquivo final
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    libmp3lame0 \
     libvips-dev \
     python3 \
     make \
     g++ \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ffmpeg -version && echo "✅ FFmpeg instalado com sucesso"
 
 # Criar diretório de trabalho
 WORKDIR /app
 
-# Criar usuário não-root para segurança
-RUN groupadd -r appuser && useradd -r -g appuser -m appuser
-
-# Criar diretório home do usuário e diretórios necessários para npm logs ANTES de mudar usuário
-RUN mkdir -p /home/appuser/.npm/_logs /tmp/.npm && \
-    chown -R appuser:appuser /home/appuser && \
-    chown -R appuser:appuser /tmp/.npm && \
-    chmod -R 777 /home/appuser/.npm && \
-    chmod -R 777 /tmp/.npm
-
 # Copiar arquivos de dependências primeiro (para cache de layers)
 COPY package*.json ./
 
-# Instalar dependências de produção (ainda como root para ter permissões)
+# Instalar dependências de produção como root
 RUN npm ci --only=production && npm cache clean --force
 
 # Copiar o resto dos arquivos da aplicação
 COPY . .
 
 # Criar diretórios necessários para a aplicação
-RUN mkdir -p public/final_audio public/uploads temp_audio
+RUN mkdir -p public/final_audio public/uploads temp_audio data
 
-# Definir permissões adequadas (ainda como root)
-RUN chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /home/appuser && \
-    chmod -R 755 public temp_audio && \
-    chmod -R 777 /home/appuser/.npm && \
-    chmod -R 777 /tmp/.npm
+# Criar usuário não-root para segurança (com diretório home)
+RUN groupadd -r appuser && \
+    useradd -r -g appuser -d /home/appuser -m -s /bin/bash appuser && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 public temp_audio data && \
+    mkdir -p /home/appuser && \
+    chown -R appuser:appuser /home/appuser
+
+# Configurar npm para usar diretório dentro de /app (não precisa de home)
+ENV NPM_CONFIG_CACHE=/app/.npm-cache
+ENV NPM_CONFIG_USERCONFIG=/app/.npmrc
+
+# Criar diretório de cache do npm
+RUN mkdir -p /app/.npm-cache && \
+    chown -R appuser:appuser /app/.npm-cache
 
 # Mudar para usuário não-root
 USER appuser
@@ -51,16 +53,10 @@ EXPOSE 3000
 # Variáveis de ambiente padrão
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV NPM_CONFIG_CACHE=/tmp/.npm
-ENV NPM_CONFIG_UPDATE_NOTIFIER=false
-ENV NPM_CONFIG_LOGLEVEL=error
-ENV NPM_CONFIG_PROGRESS=false
-ENV NODE_OPTIONS=--tls-min-v1.2
 
 # Healthcheck para verificar se a aplicação está rodando
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 1
 
-# Comando para iniciar a aplicação (usando node diretamente para evitar problemas com npm logs)
-# NODE_OPTIONS já está definido na variável de ambiente acima
-CMD ["node", "server.js"]
+# Comando para iniciar a aplicação (usando node diretamente para evitar problemas com npm)
+CMD ["sh", "-c", "cross-env NODE_OPTIONS=--tls-min-v1.2 node server.js"]

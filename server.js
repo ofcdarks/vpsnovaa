@@ -3,8 +3,6 @@
 // ================================================
 require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const https = require('https');
 const path = require('path');
 const { sanitizePrompt } = require('./sanitizePrompt');
 const bcrypt = require('bcryptjs');
@@ -13,8 +11,7 @@ const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const sqlite3 = require('sqlite3').verbose();
 const crypto = require('crypto');
-const fs = require('fs');
-const fsPromises = require('fs').promises;
+const fs = require('fs').promises;
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const ffprobePath = require('@ffprobe-installer/ffprobe').path;
@@ -23,6 +20,8 @@ const FormData = require('form-data');
 // Multer removido - substituído por função de movimentos ilimitados em imagens
 // const multer = require('multer');
 const helmet = require('helmet');
+// Importar limites de tokens baseados na documentação oficial
+const { getTokenLimits, estimateTokens, canFitInLimits } = require('./token-limits');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
@@ -69,9 +68,6 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'darkscript.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// Configurar trust proxy para funcionar corretamente com proxies reversos (nginx, EasyPanel, etc.)
-app.set('trust proxy', true);
-
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -102,17 +98,12 @@ app.use(
         mediaSrc: ["'self'", "data:", "blob:"],
         connectSrc: [
           "'self'",
-          "http://173.249.59.149:3001",
-          "https://173.249.59.149:3001",
           "https://www.youtube.com",
           "https://i.ytimg.com",
           "https://yt3.ggpht.com",
           "https://i9.ytimg.com",
           "https://www.google.com"
         ],
-        // Remover restrição de formAction para permitir envio de formulários
-        // Isso resolve o problema de CSP bloqueando formulários
-        formAction: null,
         objectSrc: ["'none'"],
         frameSrc: [
           "'self'",
@@ -137,45 +128,8 @@ const STATIC_ASSETS = new Map([
   ['/voices.js', path.join(__dirname, 'voices.js')]
 ]);
 
-// Servir arquivos estáticos com headers apropriados
 STATIC_ASSETS.forEach((filePath, route) => {
-  app.get(route, (req, res, next) => {
-    // Verificar se o arquivo existe
-    try {
-      if (!fs.existsSync(filePath)) {
-        console.error(`❌ Arquivo não encontrado: ${filePath}`);
-        return res.status(404).send('Arquivo não encontrado');
-      }
-    } catch (err) {
-      console.error(`❌ Erro ao verificar arquivo ${filePath}:`, err.message);
-      return res.status(500).send('Erro ao verificar arquivo');
-    }
-    
-    // Log para debug
-    console.log(`📦 Servindo ${route} via ${req.protocol}://${req.get('host')}`);
-    
-    // Definir Content-Type correto
-    const contentType = route.endsWith('.css') 
-      ? 'text/css; charset=utf-8' 
-      : 'application/javascript; charset=utf-8';
-    
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    
-    // Servir o arquivo
-    res.sendFile(filePath, (err) => {
-      if (err) {
-        console.error(`❌ Erro ao servir ${route}:`, err.message);
-        if (!res.headersSent) {
-          res.status(500).send('Erro ao carregar o arquivo');
-        }
-      } else {
-        console.log(`✅ ${route} servido com sucesso`);
-      }
-    });
-  });
+  app.get(route, (_, res) => res.sendFile(filePath));
 });
 
 // Health Check Endpoint
@@ -396,30 +350,215 @@ const dbAll = (sql, params = []) => new Promise((resolve, reject) => {
     });
 });
 
+// Função robusta para parsear JSON com múltiplas estratégias de correção
 const parseJsonRobustly = (text, source = "AI") => {
-    let cleanedText = text.replace(/```json\n/g, '').replace(/\n```/g, '').replace(/```\n/g, '').replace(/\n```/g, '');
+    if (!text || typeof text !== 'string') {
+        throw new Error(`Resposta vazia ou inválida da ${source} API.`);
+    }
+    
+    // Estratégia 1: Limpeza básica (remover markdown code blocks)
+    let cleanedText = text
+        .replace(/```json\s*/gi, '')
+        .replace(/```\s*/g, '')
+        .replace(/^[\s\n]*/, '')
+        .replace(/[\s\n]*$/, '');
+    
+    // Salvar primeira mensagem de erro para uso posterior
+    let firstError = null;
+    
+    // Estratégia 2: Tentar parse direto
     try {
         return JSON.parse(cleanedText);
     } catch (e) {
-        console.error(`[${source} JSON Parse Error] Could not parse JSON:`, cleanedText, "Error:", e.message);
-        const jsonMatch = cleanedText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-        if (jsonMatch) {
+        firstError = e;
+        console.warn(`[${source} JSON Parse Error] Tentativa 1 falhou:`, e.message.substring(0, 100));
+    }
+    
+    // Estratégia 3: Tentar completar JSON incompleto (strings não terminadas)
+    // Se o erro for "Unterminated string", tenta fechar strings abertas
+    if (firstError && firstError.message.includes('Unterminated string')) {
+        try {
+            // Encontrar a última string aberta e fechá-la
+            let fixed = cleanedText;
+            let openQuotes = 0;
+            let lastQuotePos = -1;
+            let inString = false;
+            let escapeNext = false;
+            
+            for (let i = 0; i < fixed.length; i++) {
+                if (escapeNext) {
+                    escapeNext = false;
+                    continue;
+                }
+                if (fixed[i] === '\\') {
+                    escapeNext = true;
+                    continue;
+                }
+                if (fixed[i] === '"') {
+                    if (inString) {
+                        inString = false;
+                        openQuotes--;
+                    } else {
+                        inString = true;
+                        openQuotes++;
+                        lastQuotePos = i;
+                    }
+                }
+            }
+            
+            // Se há strings abertas, tentar fechar
+            if (inString && lastQuotePos !== -1) {
+                // Encontrar onde a string deveria terminar (antes de } ou ] ou fim)
+                let endPos = fixed.length;
+                const nextBrace = fixed.indexOf('}', lastQuotePos);
+                const nextBracket = fixed.indexOf(']', lastQuotePos);
+                const nextComma = fixed.indexOf(',', lastQuotePos);
+                
+                if (nextBrace !== -1) endPos = Math.min(endPos, nextBrace);
+                if (nextBracket !== -1) endPos = Math.min(endPos, nextBracket);
+                if (nextComma !== -1) endPos = Math.min(endPos, nextComma);
+                
+                // Fechar a string e tentar completar o JSON
+                fixed = fixed.substring(0, endPos) + '"' + fixed.substring(endPos);
+                
+                // Tentar fechar objetos/arrays abertos
+                const openBraces = (fixed.match(/\{/g) || []).length;
+                const closeBraces = (fixed.match(/\}/g) || []).length;
+                const openBrackets = (fixed.match(/\[/g) || []).length;
+                const closeBrackets = (fixed.match(/\]/g) || []).length;
+                
+                // Adicionar fechamentos necessários
+                for (let i = 0; i < openBraces - closeBraces; i++) {
+                    fixed += '}';
+                }
+                for (let i = 0; i < openBrackets - closeBrackets; i++) {
+                    fixed += ']';
+                }
+                
+                // Remover vírgulas finais
+                fixed = fixed.replace(/,(\s*[}\]])/g, '$1');
+                
+                try {
+                    const parsed = JSON.parse(fixed);
+                    console.log(`[${source} JSON] JSON completado e parseado com sucesso`);
+                    return parsed;
+                } catch (e2) {
+                    // Continua para outras estratégias
+                }
+            }
+        } catch (e3) {
+            // Continua
+        }
+    }
+    
+    // Estratégia 4: Extrair JSON de dentro do texto (procura por { ... } ou [ ... ])
+    const jsonPatterns = [
+        /\{[\s\S]*\}/,  // Objeto JSON
+        /\[[\s\S]*\]/   // Array JSON
+    ];
+    
+    for (const pattern of jsonPatterns) {
+        const match = cleanedText.match(pattern);
+        if (match) {
             try {
-                return JSON.parse(jsonMatch[0]);
+                const parsed = JSON.parse(match[0]);
+                console.log(`[${source} JSON] JSON extraído com sucesso usando padrão`);
+                return parsed;
             } catch (e2) {
-                console.error(`[${source} JSON Re-Parse Error] Could not re-parse embedded JSON:`, jsonMatch[0], "Error:", e2.message);
-                throw new Error(`Falha ao gerar conteudo: JSON incompleto ou malformado da ${source} API. Detalhes: ${e.message}`);
+                // Continua tentando outros padrões
             }
         }
-        throw new Error(`Falha ao gerar conteudo: JSON incompleto ou malformado da ${source} API. Detalhes: ${e.message}`);
     }
+    
+    // Estratégia 5: Tentar encontrar JSON completo removendo texto antes/depois
+    // Procura pelo primeiro { ou [ e último } ou ]
+    const firstBrace = cleanedText.indexOf('{');
+    const firstBracket = cleanedText.indexOf('[');
+    const lastBrace = cleanedText.lastIndexOf('}');
+    const lastBracket = cleanedText.lastIndexOf(']');
+    
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        try {
+            let extracted = cleanedText.substring(firstBracket, lastBracket + 1);
+            
+            // Tentar completar se estiver incompleto
+            if (extracted.match(/"[^"]*$/)) {
+                // String não terminada no final
+                extracted = extracted.replace(/"([^"]*)$/, '"$1"');
+            }
+            
+            // Fechar arrays/objetos abertos
+            const openCount = (extracted.match(/\[/g) || []).length;
+            const closeCount = (extracted.match(/\]/g) || []).length;
+            for (let i = 0; i < openCount - closeCount; i++) {
+                extracted += ']';
+            }
+            
+            extracted = extracted.replace(/,(\s*[}\]])/g, '$1');
+            
+            return JSON.parse(extracted);
+        } catch (e4) {
+            // Continua
+        }
+    }
+    
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        try {
+            let extracted = cleanedText.substring(firstBrace, lastBrace + 1);
+            
+            // Tentar completar se estiver incompleto
+            if (extracted.match(/"[^"]*$/)) {
+                extracted = extracted.replace(/"([^"]*)$/, '"$1"');
+            }
+            
+            // Fechar objetos abertos
+            const openCount = (extracted.match(/\{/g) || []).length;
+            const closeCount = (extracted.match(/\}/g) || []).length;
+            for (let i = 0; i < openCount - closeCount; i++) {
+                extracted += '}';
+            }
+            
+            extracted = extracted.replace(/,(\s*[}\]])/g, '$1');
+            
+            return JSON.parse(extracted);
+        } catch (e3) {
+            // Continua
+        }
+    }
+    
+    // Estratégia 6: Tentar corrigir JSON comum (vírgulas finais, aspas não fechadas)
+    try {
+        let fixed = cleanedText
+            .replace(/,(\s*[}\]])/g, '$1')  // Remove vírgulas finais
+            .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":')  // Adiciona aspas em chaves sem aspas
+            .replace(/:\s*([^",\[\]{}]+)(\s*[,}\]])/g, (match, value, ending) => {
+                // Adiciona aspas em valores string sem aspas
+                if (!value.match(/^(true|false|null|\d+)$/)) {
+                    return `: "${value.replace(/"/g, '\\"')}"${ending}`;
+                }
+                return match;
+            });
+        return JSON.parse(fixed);
+    } catch (e5) {
+        // Última tentativa falhou
+    }
+    
+    // Se todas as estratégias falharam, log detalhado e erro
+    console.error(`[${source} JSON Parse Error] Todas as estratégias falharam.`);
+    console.error(`Texto recebido (primeiros 500 chars):`, cleanedText.substring(0, 500));
+    console.error(`Texto recebido (últimos 500 chars):`, cleanedText.substring(Math.max(0, cleanedText.length - 500)));
+    console.error(`Tamanho total:`, cleanedText.length, 'caracteres');
+    const errorMessage = firstError ? firstError.message : 'JSON inválido ou incompleto';
+    console.error(`Erro original:`, errorMessage);
+    
+    throw new Error(`Falha ao gerar conteudo: JSON incompleto ou malformado da ${source} API. Detalhes: ${errorMessage}. Por favor, tente novamente.`);
 };
 
 const initializeDb = async () => {
   try {
-    await fsPromises.mkdir(TEMP_AUDIO_DIR, { recursive: true });
-    await fsPromises.mkdir(FINAL_AUDIO_DIR, { recursive: true });
-    await fsPromises.mkdir(UPLOADS_DIR, { recursive: true });
+    await fs.mkdir(TEMP_AUDIO_DIR, { recursive: true });
+    await fs.mkdir(FINAL_AUDIO_DIR, { recursive: true });
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
 
     await dbRun(`
       CREATE TABLE IF NOT EXISTS users (
@@ -569,7 +708,7 @@ const mapSegmentsToSpeechConfig = (segments = []) => {
   const normalizedSegments = Array.isArray(segments)
     ? segments
         .map((segment, index) => ({
-          speaker: typeof segment?.speaker === 'string' && segment.speaker.trim() ? segment.speaker.trim() : `Speaker ${index + 1}`,
+          speaker: typeof segment?.speaker === 'string' && segment.speaker.trim() ? segment.speaker.trim() : `Narrador ${index + 1}`,
           voice: typeof segment?.voice === 'string' && segment.voice.trim() ? segment.voice.trim() : FALLBACK_TTS_VOICE,
           text: typeof segment?.text === 'string' ? segment.text.trim() : '',
         }))
@@ -603,7 +742,7 @@ const buildTtsPrompt = (styleInstructions = '', segments = []) => {
 
     const speaker = typeof segment?.speaker === 'string' && segment.speaker.trim()
       ? segment.speaker.trim()
-      : `Speaker ${index + 1}`;
+      : `Narrador ${index + 1}`;
     
     lines.push(`${speaker}: ${text}`);
   });
@@ -611,7 +750,173 @@ const buildTtsPrompt = (styleInstructions = '', segments = []) => {
   return lines.join('\n\n');
 };
 
-const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, retryCount = 0) => {
+// Função para verificar se FFmpeg está disponível
+const checkFfmpegAvailable = async () => {
+    try {
+        const { execSync } = require('child_process');
+        execSync(`${ffmpegPath} -version`, { stdio: 'ignore', timeout: 5000 });
+        return true;
+    } catch (error) {
+        console.warn('⚠️ FFmpeg não disponível ou com erro. Usando áudio direto da API.');
+        return false;
+    }
+};
+
+// Função para gerar áudio usando OpenAI TTS com máxima qualidade
+const generateOpenAiTtsAudio = async ({ apiKey, textInput, voiceName }) => {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 3000;
+    
+    // Mapeamento de vozes Gemini para OpenAI (aproximado)
+    const voiceMapping = {
+        'Zephyr': 'nova',      // Brilhante -> Nova (feminina, clara)
+        'Puck': 'shimmer',     // Animado -> Shimmer (feminina, expressiva)
+        'Charon': 'onyx',      // Informativo -> Onyx (masculina, grave)
+        'Kore': 'nova',        // Firme -> Nova
+        'Fenrir': 'echo',      // Excitado -> Echo (masculina, energética)
+        'Leda': 'alloy',       // Juvenil -> Alloy (neutra, jovem)
+        'Orus': 'onyx',        // Firme -> Onyx
+        'Aoede': 'shimmer',    // Arejado -> Shimmer
+        'Callirrhoe': 'alloy', // Descontraido -> Alloy
+        'Autonoe': 'nova',     // Brilhante -> Nova
+        'Enceladus': 'shimmer', // Sussurrado -> Shimmer (mais suave)
+        'Iapetus': 'echo',     // Claro -> Echo
+        'Umbriel': 'alloy',    // Descontraido -> Alloy
+        'Algieba': 'onyx',     // Suave -> Onyx
+        'Despina': 'nova',     // Suave -> Nova
+        'Erinome': 'shimmer',  // Clara -> Shimmer
+        'Algenib': 'onyx',     // Grave -> Onyx
+        'Rasalgethi': 'echo',  // Informativo -> Echo
+        'Laomedeia': 'shimmer', // Animado -> Shimmer
+        'Achernar': 'nova',    // Suave -> Nova
+        'Alnilam': 'onyx',     // Firme -> Onyx
+        'Schedar': 'echo',     // Constante -> Echo
+        'Gacrux': 'onyx',      // Maduro -> Onyx
+        'Pulcherrima': 'nova', // Projetado -> Nova
+        'Achird': 'alloy',     // Amigavel -> Alloy
+        'Zubenelgenubi': 'alloy', // Casual -> Alloy
+        'Vindemiatrix': 'shimmer', // Gentil -> Shimmer
+        'Sadachbia': 'shimmer', // Vivaz -> Shimmer
+        'Sadaltager': 'onyx',  // Conhecedor -> Onyx
+        'Sulafat': 'nova'      // Acolhedor -> Nova
+    };
+    
+    // Usa o mapeamento ou padrão
+    const openAiVoice = voiceMapping[voiceName] || 'alloy';
+    
+    // Verifica se FFmpeg está disponível (apenas uma vez por execução)
+    const ffmpegAvailable = await checkFfmpegAvailable();
+    
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            // Se FFmpeg não estiver disponível, usa MP3 direto (mais compatível)
+            // Se FFmpeg estiver disponível, tenta Opus primeiro para melhor qualidade
+            const responseFormat = ffmpegAvailable ? 'opus' : 'mp3';
+            
+            const response = await axios.post(
+                'https://api.openai.com/v1/audio/speech',
+                {
+                    model: 'tts-1-hd', // Modelo de alta qualidade (melhor disponível)
+                    input: textInput,
+                    voice: openAiVoice,
+                    response_format: responseFormat,
+                    speed: 1.0 // Velocidade natural
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    responseType: 'arraybuffer',
+                    timeout: 90000 // Timeout maior para garantir qualidade
+                }
+            );
+            
+            const audioBuffer = Buffer.from(response.data);
+            
+            // Se FFmpeg não estiver disponível ou se já recebeu MP3, retorna direto
+            if (!ffmpegAvailable || responseFormat === 'mp3') {
+                const audioBase64 = audioBuffer.toString('base64');
+                return {
+                    audioBase64: audioBase64,
+                    usage: null
+                };
+            }
+            
+            // Se chegou aqui, temos Opus e FFmpeg está disponível - tenta converter
+            try {
+                const tempOpusPath = path.join(TEMP_AUDIO_DIR, `temp_opus_${crypto.randomBytes(4).toString('hex')}.opus`);
+                const tempMp3Path = path.join(TEMP_AUDIO_DIR, `temp_mp3_${crypto.randomBytes(4).toString('hex')}.mp3`);
+                
+                await fs.writeFile(tempOpusPath, audioBuffer);
+                
+                // Converte Opus para MP3 de alta qualidade usando FFmpeg
+                await new Promise((resolve, reject) => {
+                    ffmpeg(tempOpusPath)
+                        .audioCodec('libmp3lame')
+                        .audioBitrate('320k') // Bitrate máximo para MP3 (máxima qualidade)
+                        .audioFrequency(48000) // 48kHz (alta qualidade)
+                        .audioChannels(1) // Mono para narração
+                        .outputOptions([
+                            '-q:a', '0', // VBR de máxima qualidade (0 = melhor)
+                            '-joint_stereo', '0', // Sem joint stereo (mono)
+                            '-af', 'highpass=f=80,lowpass=f=15000', // Filtros para melhorar clareza
+                            '-compression_level', '0' // Sem compressão adicional
+                        ])
+                        .on('error', (err) => {
+                            console.warn(`⚠️ Erro no FFMPEG durante otimização: ${err.message}. Usando áudio direto.`);
+                            reject(err);
+                        })
+                        .on('end', resolve)
+                        .save(tempMp3Path);
+                });
+                
+                // Lê o MP3 otimizado e converte para base64
+                const mp3Buffer = await fs.readFile(tempMp3Path);
+                const audioBase64 = mp3Buffer.toString('base64');
+                
+                // Limpa arquivos temporários
+                try {
+                    await fs.unlink(tempOpusPath);
+                    await fs.unlink(tempMp3Path);
+                } catch (cleanupError) {
+                    console.warn(`Aviso: Não foi possível limpar arquivos temporários: ${cleanupError.message}`);
+                }
+                
+                return {
+                    audioBase64: audioBase64,
+                    usage: null
+                };
+            } catch (ffmpegError) {
+                // Se FFmpeg falhar, retorna o áudio Opus direto (melhor que falhar completamente)
+                console.warn(`⚠️ FFmpeg falhou durante conversão. Retornando áudio Opus direto: ${ffmpegError.message}`);
+                const audioBase64 = audioBuffer.toString('base64');
+                return {
+                    audioBase64: audioBase64,
+                    usage: null,
+                    format: 'opus' // Indica que é Opus para o frontend saber
+                };
+            }
+        } catch (error) {
+            if (attempt < MAX_RETRIES - 1) {
+                const delay = RETRY_DELAY * (attempt + 1);
+                console.warn(`Tentativa ${attempt + 1}/${MAX_RETRIES} OpenAI TTS falhou: ${error.message}. Tentando novamente em ${delay / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                throw error;
+            }
+        }
+    }
+};
+
+const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap, provider = 'gemini' }, retryCount = 0) => {
+    // Se o provedor for OpenAI, usa a função específica
+    if (provider === 'openai') {
+        const voiceName = Array.from(speakerVoiceMap.values())[0] || 'alloy';
+        return await generateOpenAiTtsAudio({ apiKey, textInput, voiceName });
+    }
+    
+    // Código original do Gemini TTS
     const geminiTtsModel = validateTtsModel(model);
     const MAX_RETRIES = 3;
     const RETRY_DELAY = 3000; // 3 segundos
@@ -669,16 +974,48 @@ const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, r
             } catch (error) {
                 lastError = error;
                 const isNetworkError = error.message.includes('fetch failed') || 
-                                       error.message.includes('timeout') || 
+                                       error.message.includes('timeout') ||
                                        error.message.includes('Timeout') ||
                                        error.message.includes('ECONNRESET') ||
                                        error.message.includes('ETIMEDOUT') ||
                                        error.message.includes('ENOTFOUND') ||
                                        error.message.includes('ECONNREFUSED');
                 
-                if (isNetworkError && attempt < MAX_RETRIES - 1) {
-                    const delay = RETRY_DELAY * (attempt + 1);
-                    console.log(`Tentativa ${attempt + 1}/${MAX_RETRIES} falhou (${error.message}). Tentando novamente em ${delay / 1000} segundos...`);
+                const isQuotaError = error.status === 429 || 
+                                   error.message?.includes('429') || 
+                                   error.message?.includes('quota') ||
+                                   error.message?.includes('Quota exceeded');
+                
+                if (attempt < MAX_RETRIES - 1) {
+                    let delay;
+                    
+                    if (isQuotaError) {
+                        // Para erro de quota, usa o retryDelay sugerido pela API
+                        try {
+                            let retryDelaySeconds = 10; // Padrão menor para contas Pro
+                            
+                            if (error.errorDetails) {
+                                const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+                                if (retryInfo?.retryDelay) {
+                                    // retryDelay pode vir como string "12s" ou número
+                                    const delayStr = String(retryInfo.retryDelay).replace('s', '');
+                                    retryDelaySeconds = parseInt(delayStr) || 10;
+                                }
+                            }
+                            
+                            // Para contas Pro, usa o delay sugerido pela API (geralmente 10-15s)
+                            delay = Math.max(10000, retryDelaySeconds * 1000); // Mínimo 10 segundos
+                            console.log(`⚠️ Erro de quota (429) detectado. Aguardando ${delay / 1000} segundos (sugerido pela API) antes de tentar novamente...`);
+                        } catch {
+                            delay = 10000; // 10 segundos padrão para contas Pro
+                        }
+                    } else if (isNetworkError) {
+                        delay = RETRY_DELAY * (attempt + 1);
+                        console.log(`Tentativa ${attempt + 1}/${MAX_RETRIES} falhou (${error.message}). Tentando novamente em ${delay / 1000} segundos...`);
+                    } else {
+                        delay = RETRY_DELAY * (attempt + 1);
+                    }
+                    
                     await new Promise(resolve => setTimeout(resolve, delay));
                     continue;
                 } else {
@@ -705,7 +1042,7 @@ const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, r
         const tempRawPath = path.join(TEMP_AUDIO_DIR, `temp_raw_${crypto.randomBytes(4).toString('hex')}.raw`);
         const tempMp3Path = path.join(TEMP_AUDIO_DIR, `temp_mp3_${crypto.randomBytes(4).toString('hex')}.mp3`);
 
-        await fsPromises.writeFile(tempRawPath, audioBuffer);
+        await fs.writeFile(tempRawPath, audioBuffer);
 
         await new Promise((resolve, reject) => {
             ffmpeg(tempRawPath)
@@ -724,12 +1061,12 @@ const generateTtsAudio = async ({ apiKey, model, textInput, speakerVoiceMap }, r
                 .save(tempMp3Path);
         });
 
-        const mp3Buffer = await fsPromises.readFile(tempMp3Path);
+        const mp3Buffer = await fs.readFile(tempMp3Path);
         const mp3Base64 = mp3Buffer.toString('base64');
 
         // Cleanup temporary files
-        await fsPromises.unlink(tempRawPath);
-        await fsPromises.unlink(tempMp3Path);
+        await fs.unlink(tempRawPath);
+        await fs.unlink(tempMp3Path);
 
         return {
             audioBase64: mp3Base64,
@@ -783,12 +1120,19 @@ async function processLongTtsJob(jobId, jobData) {
             }
 
             const tempFilePath = path.join(TEMP_AUDIO_DIR, `${jobId}_part_${i}.mp3`);
-            await fsPromises.writeFile(tempFilePath, audioBase64, 'base64');
+            await fs.writeFile(tempFilePath, audioBase64, 'base64');
             tempFilePaths.push(tempFilePath);
         }
 
         job.message = 'Juntando partes de áudio...';
         const finalFilePath = path.join(FINAL_AUDIO_DIR, `${jobId}.mp3`);
+        
+        // Verifica se FFmpeg está disponível antes de juntar os áudios
+        // FFmpeg é ESSENCIAL para juntar múltiplos arquivos de áudio
+        const ffmpegAvailableForMerge = await checkFfmpegAvailable();
+        if (!ffmpegAvailableForMerge) {
+            throw new Error('FFmpeg não está disponível na VPS. FFmpeg é necessário para juntar os arquivos de áudio. Por favor, instale o FFmpeg no servidor.');
+        }
         
         await new Promise((resolve, reject) => {
             const command = ffmpeg();
@@ -804,8 +1148,16 @@ async function processLongTtsJob(jobId, jobData) {
                     '-fflags', '+genpts', // Gera timestamps para melhor sincronização
                     '-avoid_negative_ts', 'make_zero' // Evita problemas de timestamps negativos
                 ])
-                .on('error', (err) => reject(new Error(`Erro no FFMPEG durante a conversão: ${err.message}`)))
-                .on('end', resolve)
+                .on('error', (err) => {
+                    console.error(`❌ Erro crítico no FFMPEG ao juntar áudios: ${err.message}`);
+                    console.error(`   FFmpeg é necessário para juntar os arquivos de áudio.`);
+                    console.error(`   Verifique se o FFmpeg está instalado corretamente na VPS.`);
+                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. FFmpeg é necessário para esta operação.`));
+                })
+                .on('end', () => {
+                    console.log(`✅ Áudios juntados com sucesso: ${tempFilePaths.length} partes combinadas em ${finalFilePath}`);
+                    resolve();
+                })
                 .mergeToFile(finalFilePath, TEMP_AUDIO_DIR);
         });
 
@@ -821,7 +1173,7 @@ async function processLongTtsJob(jobId, jobData) {
     } finally {
         for (const filePath of tempFilePaths) {
             try {
-                await fsPromises.unlink(filePath);
+                await fs.unlink(filePath);
             } catch (unlinkError) {
                 console.warn(`Não foi possível excluir o arquivo temporário ${filePath}: ${unlinkError.message}`);
             }
@@ -1006,7 +1358,7 @@ async function sendPasswordResetEmail(to, tempPassword) {
     const transporter = await getEmailTransporter();
 
     const templatePath = path.join(__dirname, 'email-template.html');
-    let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
+    let emailHtml = await fs.readFile(templatePath, 'utf-8');
     emailHtml = emailHtml.replace('{{TEMP_PASSWORD}}', tempPassword);
 
     const mailOptions = {
@@ -1024,7 +1376,7 @@ async function sendActivationEmail(to, loginUrl = process.env.APP_URL || 'https:
         const transporter = await getEmailTransporter();
 
         const templatePath = path.join(__dirname, 'email-activation-template.html');
-        let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
+        let emailHtml = await fs.readFile(templatePath, 'utf-8');
         emailHtml = emailHtml.replace('{{LOGIN_URL}}', loginUrl);
 
         const mailOptions = {
@@ -1047,7 +1399,7 @@ async function sendCancellationEmail(to) {
         const transporter = await getEmailTransporter();
 
         const templatePath = path.join(__dirname, 'email-cancellation-template.html');
-        let emailHtml = await fsPromises.readFile(templatePath, 'utf-8');
+        let emailHtml = await fs.readFile(templatePath, 'utf-8');
 
         const mailOptions = {
             from: `"DARKSCRIPT AI" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
@@ -1300,18 +1652,40 @@ app.post('/api/generate', verifyToken, async (req, res) => {
     const gptKey = userSettings.gpt;
     const geminiKeys = (Array.isArray(userSettings.gemini) ? userSettings.gemini : [userSettings.gemini]).filter(k => k && k.trim() !== '');
     
+    // Detecção do provider baseado no modelo selecionado
     let provider;
-    if (model.startsWith('claude-')) {
+    const modelLower = model.toLowerCase().trim();
+    
+    if (modelLower.startsWith('claude-')) {
         provider = 'claude';
-    } else if (model.startsWith('gpt-')) {
+    } else if (modelLower.startsWith('gpt-')) {
         provider = 'gpt';
+    } else if (modelLower.includes('gemini') || modelLower.startsWith('gemini-')) {
+        provider = 'gemini';
     } else {
+        // Fallback: se não identificar, assume Gemini (compatibilidade)
+        console.warn(`⚠️ Modelo não reconhecido: "${model}". Assumindo Gemini como padrão.`);
         provider = 'gemini';
     }
+    
+    console.log(`📊 Requisição de geração: Modelo="${model}", Provider="${provider}"`);
 
-    const sanitizedMaxOutputTokens = typeof maxOutputTokens === 'number' && maxOutputTokens > 0
-      ? Math.min(Math.floor(maxOutputTokens), 8192)
-      : undefined;
+    // Obter limites do modelo e validar tokens
+    const tokenLimits = getTokenLimits(model);
+    const promptTokens = estimateTokens(prompt);
+    const requestedOutputTokens = typeof maxOutputTokens === 'number' && maxOutputTokens > 0
+      ? Math.min(Math.floor(maxOutputTokens), tokenLimits.maxOutputTokens)
+      : tokenLimits.maxOutputTokens;
+    
+    // Verificar se cabe nos limites
+    const totalTokens = promptTokens + requestedOutputTokens;
+    if (totalTokens > tokenLimits.maxContextLength) {
+        const errorMsg = `Limite de tokens excedido. Prompt: ~${promptTokens} tokens, Saída solicitada: ${requestedOutputTokens} tokens, Total: ${totalTokens} tokens. Limite do modelo ${model}: ${tokenLimits.maxContextLength} tokens. Reduza o tamanho do prompt ou a saída esperada.`;
+        console.error(`❌ ${errorMsg}`);
+        return res.status(400).json({ message: errorMsg });
+    }
+    
+    const sanitizedMaxOutputTokens = requestedOutputTokens;
     const sanitizedTemperature = typeof temperature === 'number' && !Number.isNaN(temperature)
       ? Math.min(Math.max(temperature, 0), 1.5)
       : undefined;
@@ -1325,7 +1699,8 @@ app.post('/api/generate', verifyToken, async (req, res) => {
         let apiResponseStream;
         if (provider === 'claude') {
             if (!claudeKey) throw new Error("Chave de API Claude não configurada.");
-            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || 8000, 8000);
+            // Respeitar limite máximo de tokens de saída do modelo Claude
+            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
             const claudeTemperature = sanitizedTemperature ?? 0.7;
             const response = await axios.post('https://api.anthropic.com/v1/messages', {
                 model: model,
@@ -1344,7 +1719,12 @@ app.post('/api/generate', verifyToken, async (req, res) => {
                 messages: [{ role: "user", content: prompt }],
                 stream: true
             };
-            if (sanitizedMaxOutputTokens) body.max_tokens = sanitizedMaxOutputTokens;
+            // Respeitar limite máximo de tokens de saída do modelo
+            if (sanitizedMaxOutputTokens) {
+                body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
+            } else {
+                body.max_tokens = tokenLimits.maxOutputTokens;
+            }
             if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
             const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
                 headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
@@ -1357,7 +1737,8 @@ app.post('/api/generate', verifyToken, async (req, res) => {
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
             const generationConfig = {};
             if (schema) generationConfig.response_mime_type = "application/json";
-            generationConfig.maxOutputTokens = sanitizedMaxOutputTokens || 8192;
+            // Respeitar limite máximo de tokens de saída do modelo Gemini
+            generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
             if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
             const response = await axios.post(apiUrl, {
                 contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -1374,7 +1755,8 @@ app.post('/api/generate', verifyToken, async (req, res) => {
         if (provider === 'claude') {
             if (!claudeKey) throw new Error("A chave da API Claude não está configurada.");
             apiSource = `Claude (${model})`;
-            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || 8000, 8000);
+            // Respeitar limite máximo de tokens de saída do modelo Claude
+            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
             const claudeTemperature = sanitizedTemperature ?? 0.7;
             const response = await callApiWithRetries(() => axios.post('https://api.anthropic.com/v1/messages', {
                 model: model,
@@ -1393,10 +1775,21 @@ app.post('/api/generate', verifyToken, async (req, res) => {
             apiSource = `OpenAI (${model})`;
             const body = {
                 model: model,
-                messages: [{ role: "user", content: prompt }],
+                messages: schema ? [
+                    { 
+                        role: "system", 
+                        content: "Você DEVE retornar APENAS JSON válido. Não inclua texto antes ou depois. Não use markdown. Todas as strings entre aspas duplas. Sem vírgulas finais." 
+                    },
+                    { role: "user", content: prompt }
+                ] : [{ role: "user", content: prompt }],
                 ...(schema && { response_format: { type: "json_object" } })
             };
-            if (sanitizedMaxOutputTokens) body.max_tokens = sanitizedMaxOutputTokens;
+            // Respeitar limite máximo de tokens de saída do modelo
+            if (sanitizedMaxOutputTokens) {
+                body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
+            } else {
+                body.max_tokens = tokenLimits.maxOutputTokens;
+            }
             if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
             const response = await callApiWithRetries(() => axios.post('https://api.openai.com/v1/chat/completions', body, {
                 headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
@@ -1410,28 +1803,55 @@ app.post('/api/generate', verifyToken, async (req, res) => {
              apiSource = `Gemini (${model})`;
              const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
              const generationConfig = {};
-             if (schema) generationConfig.response_mime_type = "application/json";
-             generationConfig.maxOutputTokens = sanitizedMaxOutputTokens || 8192;
-             if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
-             const response = await callApiWithRetries(() => axios.post(apiUrl, {
-                contents: [{ role: "user", parts: [{ text: prompt }] }],
-                generationConfig
-             }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
-             
-             // Verificar se há bloqueios de segurança
-             if (response.data.candidates && response.data.candidates.length > 0) {
-                 const candidate = response.data.candidates[0];
-                 if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
-                     throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
+             if (schema) {
+                 generationConfig.response_mime_type = "application/json";
+                 // Instrução adicional no prompt para garantir JSON válido
+                 const enhancedPrompt = `${prompt}\n\nCRITICO: Retorne APENAS JSON válido. Não inclua texto antes ou depois. Não use markdown code blocks. Todas as strings entre aspas duplas. Sem vírgulas finais. O JSON deve ser completo e válido, sem cortes.`;
+                 generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
+                 if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
+                 const response = await callApiWithRetries(() => axios.post(apiUrl, {
+                    contents: [{ role: "user", parts: [{ text: enhancedPrompt }] }],
+                    generationConfig
+                 }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
+                 
+                 // Verificar se há bloqueios de segurança
+                 if (response.data.candidates && response.data.candidates.length > 0) {
+                     const candidate = response.data.candidates[0];
+                     if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
+                         throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
+                     }
                  }
+                 
+                 const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+                 if (!text || text.trim().length === 0) {
+                     console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
+                     throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
+                 }
+                 aiResult = parseJsonRobustly(text, "Gemini");
+             } else {
+                 // Respeitar limite máximo de tokens de saída do modelo Gemini
+                 generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
+                 if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
+                 const response = await callApiWithRetries(() => axios.post(apiUrl, {
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                    generationConfig
+                 }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
+                 
+                 // Verificar se há bloqueios de segurança
+                 if (response.data.candidates && response.data.candidates.length > 0) {
+                     const candidate = response.data.candidates[0];
+                     if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
+                         throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
+                     }
+                 }
+                 
+                 const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+                 if (!text || text.trim().length === 0) {
+                     console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
+                     throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
+                 }
+                 aiResult = { text: text.trim() };
              }
-             
-             const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-             if (!text || text.trim().length === 0) {
-                 console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
-                 throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
-             }
-             aiResult = schema ? parseJsonRobustly(text, "Gemini") : { text: text.trim() };
         }
         res.json({ data: aiResult, apiSource });
     }
@@ -2677,25 +3097,36 @@ app.post('/api/imagefx/video-status/:jobId', verifyToken, async (req, res) => {
 });
 
 app.post('/api/tts/preview', verifyToken, async (req, res) => {
-    const { voice, model } = req.body || {};
+    const { voice, model, provider = 'gemini' } = req.body || {};
     const previewVoice = typeof voice === 'string' && voice.trim() ? voice.trim() : FALLBACK_TTS_VOICE;
-    const previewText = `Speaker 1: ${DEFAULT_TTS_SAMPLE_TEXT}`;
+    const previewText = `Narrador: ${DEFAULT_TTS_SAMPLE_TEXT}`;
     const validatedModel = validateTtsModel(model);
 
     try {
         const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
         const userSettings = userSettingsRow?.settings ? JSON.parse(userSettingsRow.settings) : {};
-        const geminiKey = getFirstGeminiKeyFromSettings(userSettings);
-
-        if (!geminiKey) {
-            return res.status(400).json({ message: 'Configure uma chave da API Gemini.' });
+        
+        let apiKey;
+        if (provider === 'openai') {
+            const gptKey = typeof userSettings.gpt === 'string' ? userSettings.gpt.trim() : '';
+            if (!gptKey) {
+                return res.status(400).json({ message: 'Configure uma chave da API OpenAI (GPT) para usar o TTS da OpenAI.' });
+            }
+            apiKey = gptKey;
+        } else {
+            const geminiKey = getFirstGeminiKeyFromSettings(userSettings);
+            if (!geminiKey) {
+                return res.status(400).json({ message: 'Configure uma chave da API Gemini.' });
+            }
+            apiKey = geminiKey;
         }
 
         const { audioBase64 } = await generateTtsAudio({
-            apiKey: geminiKey,
+            apiKey: apiKey,
             model: validatedModel,
             textInput: previewText,
-            speakerVoiceMap: new Map([['Speaker 1', previewVoice]])
+            speakerVoiceMap: new Map([['Narrador', previewVoice]]),
+            provider: provider || 'gemini'
         });
 
         res.json({
@@ -2832,7 +3263,7 @@ function splitTextIntoChunks(text, charLimit) {
 
 
 async function processScriptTtsJob(jobId, jobData) {
-    const { apiKey, ttsModel, script, voice, styleInstructions } = jobData;
+    const { apiKey, ttsModel, script, voice, styleInstructions, provider = 'gemini' } = jobData;
     const job = ttsJobs[jobId];
     
     // Garante que o job existe e reinicializa os valores
@@ -2849,11 +3280,24 @@ async function processScriptTtsJob(jobId, jobData) {
     const tempFilePaths = [];
 
     try {
-        const validatedTtsModel = validateTtsModel(ttsModel);
+        // Define o modelo e limite baseado no provedor
+        let validatedTtsModel;
+        let charLimit;
+        let minDelayBetweenRequests;
         
-        // Limite de caracteres por parte: 5000 caracteres máximo
-        // Para áudios longos (40-60 minutos), qualidade é mais importante que velocidade
-        const charLimit = 5000;
+        if (provider === 'openai') {
+            // OpenAI TTS: limite de 4096 caracteres por requisição
+            validatedTtsModel = 'tts-1-hd'; // Não usado, mas mantido para compatibilidade
+            charLimit = 4000; // 4000 caracteres para margem de segurança (limite OpenAI: 4096)
+            minDelayBetweenRequests = 2000; // 2 segundos (OpenAI tem limites mais generosos)
+            console.log(`📢 Usando OpenAI TTS para gerar áudio`);
+        } else {
+            // Gemini TTS: limite de 32k tokens por sessão
+            validatedTtsModel = 'gemini-2.5-flash-preview-tts';
+            charLimit = 6000; // 6000 caracteres (baseado em 32k tokens)
+            minDelayBetweenRequests = 10000; // 10 segundos (mais conservador para Gemini)
+            console.log(`📢 Usando Gemini TTS para gerar áudio`);
+        }
         
         // Log para monitorar processamento de áudios longos
         const estimatedMinutes = Math.ceil((script.length / charLimit) * 0.5); // ~0.5 min por chunk
@@ -2867,6 +3311,11 @@ async function processScriptTtsJob(jobId, jobData) {
         if (!chunks || chunks.length === 0) {
             throw new Error("Não foi possível dividir o roteiro em partes.");
         }
+        
+        // Validação prévia: verifica se há chunks antes de processar
+        console.log(`📊 Roteiro dividido em ${chunks.length} parte(s) de até ${charLimit} caracteres cada.`);
+        console.log(`   Total de caracteres: ${script.length.toLocaleString('pt-BR')}`);
+        console.log(`   Estimativa de tempo: ~${Math.ceil(chunks.length * 10 / 60)} minutos (com delays de 10s entre partes)`);
 
         // Atualiza o job com o total de chunks ANTES de começar o processamento
         job.total = chunks.length;
@@ -2914,16 +3363,73 @@ async function processScriptTtsJob(jobId, jobData) {
                             apiKey,
                             model: validatedTtsModel,
                             textInput,
-                            speakerVoiceMap: new Map([['Narrador', voice]])
+                            speakerVoiceMap: new Map([['Narrador', voice]]),
+                            provider: provider || 'gemini'
                         });
                         audioBase64 = result.audioBase64;
                         break;
                     } catch (error) {
                         lastError = error;
+                        const isQuotaError = error.status === 429 || 
+                                           error.message?.includes('429') || 
+                                           error.message?.includes('quota') ||
+                                           error.message?.includes('Quota exceeded');
+                        
+                        // Verifica se é erro de quota diária esgotada (limit: 0) - apenas para Gemini
+                        if (provider === 'gemini') {
+                            const isDailyQuotaExceeded = error.message?.includes('per_day') || 
+                                                        error.message?.includes('limit: 0') ||
+                                                        (error.errorDetails && error.errorDetails.some(d => 
+                                                            d['@type'] === 'type.googleapis.com/google.rpc.QuotaFailure' &&
+                                                            d.violations?.some(v => 
+                                                                v.quotaMetric?.includes('per_day') || 
+                                                                v.quotaValue === '0'
+                                                            )
+                                                        ));
+                            
+                            if (isDailyQuotaExceeded) {
+                                // Quota diária esgotada - para imediatamente
+                                console.error(`❌ ERRO CRÍTICO: Quota diária do modelo TTS esgotada ou não configurada (limit: 0).`);
+                                console.error(`   A conta pode não ter acesso ao modelo TTS Preview ou a quota diária foi esgotada.`);
+                                console.error(`   Verifique: https://ai.dev/usage?tab=rate-limit`);
+                                
+                                job.status = 'failed';
+                                job.message = 'Quota diária do modelo TTS esgotada ou não configurada. Verifique sua conta na Google AI Studio (https://ai.dev/usage?tab=rate-limit). O modelo TTS está em pré-lançamento e pode ter limitações.';
+                                throw new Error('Quota diária do modelo TTS esgotada. Verifique sua conta na Google AI Studio. O modelo TTS está em pré-lançamento e pode ter limitações de acesso.');
+                            }
+                        }
+                        
                         console.warn(`Tentativa ${attempt}/${maxAttempts} de gerar áudio para o chunk ${globalIndex + 1} falhou: ${error.message}`);
+                        
                         if (attempt < maxAttempts) {
-                            // Aumenta o tempo de espera progressivamente
-                            const waitTime = 2000 * attempt;
+                            let waitTime;
+                            
+                            // Se for erro de quota (por minuto), usa o retryDelay sugerido pela API
+                            if (isQuotaError) {
+                                try {
+                                    // Tenta extrair o retryDelay do erro
+                                    let retryDelaySeconds = 60; // Padrão conservador
+                                    
+                                    if (error.errorDetails) {
+                                        const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+                                        if (retryInfo?.retryDelay) {
+                                            // retryDelay pode vir como string "12s" ou número
+                                            const delayStr = String(retryInfo.retryDelay).replace('s', '').replace(/[^0-9]/g, '');
+                                            retryDelaySeconds = parseInt(delayStr) || 60;
+                                        }
+                                    }
+                                    
+                                    // Aguarda o tempo sugerido pela API (mínimo 60 segundos)
+                                    waitTime = Math.max(60000, retryDelaySeconds * 1000);
+                                    console.log(`⚠️ Erro de quota (429) detectado. Aguardando ${waitTime / 1000} segundos (sugerido pela API) antes de tentar novamente...`);
+                                } catch {
+                                    waitTime = 60000; // 60 segundos padrão
+                                }
+                            } else {
+                                // Para outros erros, aumenta o tempo de espera progressivamente
+                                waitTime = 2000 * attempt;
+                            }
+                            
                             await new Promise(resolve => setTimeout(resolve, waitTime));
                         }
                     }
@@ -2934,7 +3440,7 @@ async function processScriptTtsJob(jobId, jobData) {
                 }
 
                 const tempFilePath = path.join(TEMP_AUDIO_DIR, `${jobId}_part_${globalIndex}.mp3`);
-                await fsPromises.writeFile(tempFilePath, audioBase64, 'base64');
+                await fs.writeFile(tempFilePath, audioBase64, 'base64');
                 
                 // ATUALIZA o progresso de forma ATÔMICA quando esta parte completa
                 // Incrementa o contador de forma sequencial para garantir progresso gradual
@@ -2948,34 +3454,92 @@ async function processScriptTtsJob(jobId, jobData) {
                 return { index: globalIndex, path: tempFilePath };
             });
             
-            // Processa o lote com concorrência limitada (5 chunks simultâneos)
-            // Para áudios longos, processa em grupos menores para melhor gerenciamento
-            const CONCURRENT_LIMIT = 5;
+            // Processamento sequencial com delay entre cada requisição para evitar quota
+            // Delay ajustado baseado no provedor (já definido acima)
             const batchResults = [];
             
-            for (let i = 0; i < batchPromises.length; i += CONCURRENT_LIMIT) {
-                const concurrentBatch = batchPromises.slice(i, i + CONCURRENT_LIMIT);
-                
-                // Aguarda todas as promises completarem
-                // O progresso já é atualizado dentro de cada promise individual quando completa
-                // Não precisamos duplicar a atualização aqui
-                const results = await Promise.allSettled(concurrentBatch);
-                
-                // Processa resultados
-                results.forEach((result) => {
-                    if (result.status === 'fulfilled') {
-                        batchResults.push(result.value);
+            // Processa sequencialmente (uma requisição por vez) para garantir que não ultrapasse quota
+            for (let i = 0; i < batchPromises.length; i++) {
+                try {
+                    const result = await batchPromises[i];
+                    if (result) {
+                        batchResults.push(result);
                     }
-                });
-                
-                // Atualiza mensagem geral com o progresso atual
-                // O progresso já foi atualizado individualmente por cada promise que completou
-                const currentProgress = Math.min(job.progress, job.total);
-                job.message = `Processadas ${currentProgress} de ${job.total} partes...`;
-                
-                // Pequeno delay entre grupos para não sobrecarregar a API
-                if (i + CONCURRENT_LIMIT < batchPromises.length) {
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                    
+                    // Atualiza mensagem geral com o progresso atual
+                    const currentProgress = Math.min(job.progress, job.total);
+                    job.message = `Processadas ${currentProgress} de ${job.total} partes...`;
+                    
+                    // Delay obrigatório entre requisições (exceto na última)
+                    if (i < batchPromises.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, minDelayBetweenRequests));
+                    }
+                } catch (error) {
+                    // Se falhar, tenta novamente após delay maior
+                    console.warn(`Erro ao processar parte ${i + 1}: ${error.message}`);
+                    
+                    // Se for erro de quota, aguarda mais tempo
+                    const isQuotaError = error.status === 429 || 
+                                       error.message?.includes('429') || 
+                                       error.message?.includes('quota') ||
+                                       error.message?.includes('Quota exceeded');
+                    
+                    if (isQuotaError) {
+                        // Verifica se é erro de quota diária esgotada (limit: 0)
+                        const isDailyQuotaExceeded = error.message?.includes('per_day') || 
+                                                    error.message?.includes('limit: 0') ||
+                                                    (error.errorDetails && error.errorDetails.some(d => 
+                                                        d['@type'] === 'type.googleapis.com/google.rpc.QuotaFailure' &&
+                                                        d.violations?.some(v => v.quotaMetric?.includes('per_day'))
+                                                    ));
+                        
+                        if (isDailyQuotaExceeded) {
+                            // Quota diária esgotada ou não configurada - não adianta retry
+                            console.error(`❌ ERRO CRÍTICO: Quota diária do modelo TTS esgotada ou não configurada (limit: 0).`);
+                            console.error(`   A conta pode não ter acesso ao modelo TTS ou a quota diária foi esgotada.`);
+                            console.error(`   Verifique: https://ai.dev/usage?tab=rate-limit`);
+                            
+                            job.status = 'failed';
+                            job.message = 'Quota diária do modelo TTS esgotada ou não configurada. Verifique sua conta na Google AI Studio.';
+                            throw new Error('Quota diária do modelo TTS esgotada. Verifique sua conta na Google AI Studio (https://ai.dev/usage?tab=rate-limit)');
+                        }
+                        
+                        // Para outros erros de quota (por minuto), tenta retry
+                        let waitTime = 60000;
+                        try {
+                            if (error.errorDetails) {
+                                const retryInfo = error.errorDetails.find(d => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo');
+                                if (retryInfo?.retryDelay) {
+                                    const delayStr = String(retryInfo.retryDelay).replace('s', '').replace(/[^0-9]/g, '');
+                                    const suggestedDelay = parseInt(delayStr) || 60;
+                                    waitTime = Math.max(60000, suggestedDelay * 1000); // Mínimo 60 segundos
+                                }
+                            }
+                        } catch {}
+                        
+                        console.log(`⚠️ Erro de quota (429) na parte ${i + 1}. Aguardando ${waitTime / 1000} segundos conforme sugerido pela API...`);
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
+                        
+                        // Tenta novamente esta parte após o delay
+                        try {
+                            const retryResult = await batchPromises[i];
+                            if (retryResult) {
+                                batchResults.push(retryResult);
+                                console.log(`✅ Parte ${i + 1} processada com sucesso após retry.`);
+                            }
+                        } catch (retryError) {
+                            console.error(`❌ Falha ao reprocessar parte ${i + 1} após erro de quota: ${retryError.message}`);
+                            // Continua para a próxima parte para não travar todo o processo
+                        }
+                    } else {
+                        // Para outros erros, também aguarda antes de continuar
+                        console.warn(`Erro não relacionado a quota na parte ${i + 1}: ${error.message}`);
+                    }
+                    
+                    // Delay antes da próxima requisição
+                    if (i < batchPromises.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, MIN_DELAY_BETWEEN_REQUESTS));
+                    }
                 }
             }
             
@@ -2996,6 +3560,13 @@ async function processScriptTtsJob(jobId, jobData) {
         job.message = 'Juntando partes de áudio...';
         const finalFilePath = path.join(FINAL_AUDIO_DIR, `${jobId}.mp3`);
         
+        // Verifica se FFmpeg está disponível antes de juntar os áudios
+        // FFmpeg é ESSENCIAL para juntar múltiplos arquivos de áudio
+        const ffmpegAvailableForMerge = await checkFfmpegAvailable();
+        if (!ffmpegAvailableForMerge) {
+            throw new Error('FFmpeg não está disponível na VPS. FFmpeg é necessário para juntar os arquivos de áudio. Por favor, instale o FFmpeg no servidor.');
+        }
+        
         await new Promise((resolve, reject) => {
             const command = ffmpeg();
             tempFilePaths.forEach(filePath => command.input(filePath));
@@ -3010,8 +3581,16 @@ async function processScriptTtsJob(jobId, jobData) {
                     '-fflags', '+genpts', // Gera timestamps para melhor sincronização
                     '-avoid_negative_ts', 'make_zero' // Evita problemas de timestamps negativos
                 ])
-                .on('error', (err) => reject(new Error(`Erro no FFMPEG: ${err.message}`)))
-                .on('end', resolve)
+                .on('error', (err) => {
+                    console.error(`❌ Erro crítico no FFMPEG ao juntar áudios: ${err.message}`);
+                    console.error(`   FFmpeg é necessário para juntar os arquivos de áudio.`);
+                    console.error(`   Verifique se o FFmpeg está instalado corretamente na VPS.`);
+                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. FFmpeg é necessário para esta operação.`));
+                })
+                .on('end', () => {
+                    console.log(`✅ Áudios juntados com sucesso: ${tempFilePaths.length} partes combinadas em ${finalFilePath}`);
+                    resolve();
+                })
                 .mergeToFile(finalFilePath, TEMP_AUDIO_DIR);
         });
 
@@ -3027,7 +3606,7 @@ async function processScriptTtsJob(jobId, jobData) {
     } finally {
         for (const filePath of tempFilePaths) {
             try {
-                await fsPromises.unlink(filePath);
+                await fs.unlink(filePath);
             } catch (unlinkError) {
                 console.warn(`Não foi possível excluir o arquivo temporário ${filePath}: ${unlinkError.message}`);
             }
@@ -3038,7 +3617,7 @@ async function processScriptTtsJob(jobId, jobData) {
 }
 
 app.post('/api/tts/generate-from-script', verifyToken, async (req, res) => {
-    const { ttsModel, script, voice, styleInstructions } = req.body;
+    const { ttsModel, script, voice, styleInstructions, provider = 'gemini' } = req.body;
 
     if (!script || !voice || !ttsModel) {
         return res.status(400).json({ message: 'Roteiro, voz e modelo de IA são obrigatórios.' });
@@ -3047,19 +3626,30 @@ app.post('/api/tts/generate-from-script', verifyToken, async (req, res) => {
     try {
         const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
         const userSettings = userSettingsRow?.settings ? JSON.parse(userSettingsRow.settings) : {};
-        const geminiKey = getFirstGeminiKeyFromSettings(userSettings);
-
-        if (!geminiKey) {
-            return res.status(400).json({ message: 'Configure uma chave da API Gemini.' });
+        
+        let apiKey;
+        if (provider === 'openai') {
+            const gptKey = typeof userSettings.gpt === 'string' ? userSettings.gpt.trim() : '';
+            if (!gptKey) {
+                return res.status(400).json({ message: 'Configure uma chave da API OpenAI (GPT) para usar o TTS da OpenAI.' });
+            }
+            apiKey = gptKey;
+        } else {
+            const geminiKey = getFirstGeminiKeyFromSettings(userSettings);
+            if (!geminiKey) {
+                return res.status(400).json({ message: 'Configure uma chave da API Gemini.' });
+            }
+            apiKey = geminiKey;
         }
 
         const jobId = `tts-script-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
         const jobData = {
-            apiKey: geminiKey,
+            apiKey,
             ttsModel: validateTtsModel(ttsModel),
             script,
             voice,
             styleInstructions,
+            provider: provider || 'gemini'
         };
 
         ttsJobs[jobId] = {
@@ -3112,7 +3702,7 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                     await fs.access(dirPath);
                 } catch {
                     // Diretório não existe, cria ele
-                    await fsPromises.mkdir(dirPath, { recursive: true });
+                    await fs.mkdir(dirPath, { recursive: true });
                     return 0;
                 }
 
@@ -3123,11 +3713,11 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                 for (const file of files) {
                     try {
                         const filePath = path.join(dirPath, file);
-                        const stats = await fsPromises.stat(filePath);
+                        const stats = await fs.stat(filePath);
                         
                         // Remove apenas arquivos (não diretórios)
                         if (stats.isFile()) {
-                            await fsPromises.unlink(filePath);
+                            await fs.unlink(filePath);
                             fileCount++;
                         } else if (stats.isDirectory()) {
                             // Se for um diretório, limpa recursivamente (mas não remove o diretório em si)
@@ -3135,9 +3725,9 @@ app.post('/api/clear-cache', verifyToken, async (req, res) => {
                             for (const subFile of subFiles) {
                                 try {
                                     const subFilePath = path.join(filePath, subFile);
-                                    const subStats = await fsPromises.stat(subFilePath);
+                                    const subStats = await fs.stat(subFilePath);
                                     if (subStats.isFile()) {
-                                        await fsPromises.unlink(subFilePath);
+                                        await fs.unlink(subFilePath);
                                         fileCount++;
                                     }
                                 } catch (subError) {
@@ -4056,7 +4646,7 @@ app.post('/api/admin/files/folder', verifyToken, requireAdmin, async (req, res) 
     }
 
     try {
-        await fsPromises.mkdir(targetPath, { recursive: true });
+        await fs.mkdir(targetPath, { recursive: true });
         res.status(201).json({ message: `Pasta '${folderName}' criada com sucesso.` });
     } catch (err) {
         console.error("Erro ao criar pasta:", err.message);
@@ -4870,12 +5460,12 @@ app.delete('/api/admin/files', verifyToken, requireAdmin, async (req, res) => {
     }
 
     try {
-        const stats = await fsPromises.stat(absolutePath);
+        const stats = await fs.stat(absolutePath);
         if (stats.isDirectory()) {
             await fs.rm(absolutePath, { recursive: true, force: true }); // Deleta diretório e conteúdo
             res.json({ message: `Pasta '${filePath}' e seu conteúdo excluídos com sucesso.` });
         } else {
-            await fsPromises.unlink(absolutePath); // Deleta arquivo
+            await fs.unlink(absolutePath); // Deleta arquivo
             res.json({ message: `Arquivo '${filePath}' excluído com sucesso.` });
         }
     } catch (err) {
@@ -4973,117 +5563,57 @@ async function startServer() {
             });
         };
 
-        // Configuração de portas HTTP e HTTPS
-        const HTTP_PORT = parseInt(process.env.HTTP_PORT || PORT, 10);
-        const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || (PORT + 1), 10);
+        // Tenta iniciar na porta especificada ou uma alternativa
+        let currentPort = PORT;
+        let portAvailable = await isPortAvailable(currentPort);
         
-        // Verificar se há certificados SSL configurados
-        const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
-        const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
-        const hasSSL = SSL_KEY_PATH && SSL_CERT_PATH && fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH);
-        
-        // Função para encontrar porta disponível
-        const findAvailablePort = async (startPort) => {
-            for (let i = 0; i <= 10; i++) {
-                const testPort = startPort + i;
-                if (await isPortAvailable(testPort)) {
-                    return testPort;
+        if (!portAvailable) {
+            console.warn(`⚠️  Porta ${currentPort} já está em uso. Tentando porta alternativa...`);
+            // Tenta portas alternativas (3001, 3002, etc.)
+            for (let i = 1; i <= 10; i++) {
+                currentPort = PORT + i;
+                portAvailable = await isPortAvailable(currentPort);
+                if (portAvailable) {
+                    console.log(`✅ Porta alternativa ${currentPort} disponível.`);
+                    break;
                 }
             }
-            return null;
-        };
-        
-        // Iniciar servidor HTTP (sempre)
-        let httpPort = await findAvailablePort(HTTP_PORT);
-        if (!httpPort) {
-            console.error(`❌ Erro: Não foi possível encontrar uma porta HTTP disponível (tentadas ${HTTP_PORT}-${HTTP_PORT + 10}).`);
-            process.exit(1);
+            
+            if (!portAvailable) {
+                console.error(`❌ Erro: Não foi possível encontrar uma porta disponível (tentadas ${PORT}-${PORT + 10}).`);
+                console.error(`   A porta ${PORT} está em uso. Para resolver:`);
+                console.error(`   1. Execute o script: kill-port-3000.bat (recomendado)`);
+                console.error(`   2. Ou manualmente: netstat -ano | findstr :${PORT}`);
+                console.error(`   3. Depois: taskkill /PID <PID> /F`);
+                process.exit(1);
+            }
         }
-        
-        const httpServer = http.createServer(app);
-        httpServer.listen(httpPort, () => {
-            console.log(`✅ Servidor HTTP rodando na porta ${httpPort}`);
-            if (httpPort !== HTTP_PORT) {
-                console.log(`   (Porta original ${HTTP_PORT} estava ocupada)`);
+
+        const server = app.listen(currentPort, () => {
+            console.log(`✅ Servidor rodando na porta ${currentPort}`);
+            if (currentPort !== PORT) {
+                console.log(`   (Porta original ${PORT} estava ocupada)`);
             }
         });
         
-        httpServer.on('error', (err) => {
+        // Trata erros após o servidor iniciar
+        server.on('error', (err) => {
             if (err.code === 'EADDRINUSE') {
-                console.error(`❌ Erro: Porta HTTP ${httpPort} foi ocupada após a verificação.`);
+                console.error(`❌ Erro: Porta ${currentPort} foi ocupada após a verificação.`);
+                console.error(`   Execute: kill-port-3000.bat`);
                 process.exit(1);
             } else {
-                console.error(`❌ Erro no servidor HTTP:`, err);
+                console.error(`❌ Erro no servidor:`, err);
                 process.exit(1);
             }
         });
         
-        httpServer.timeout = 0;
-        
-        // Iniciar servidor HTTPS (se houver certificados)
-        let httpsServer = null;
-        if (hasSSL) {
-            try {
-                const httpsOptions = {
-                    key: fs.readFileSync(SSL_KEY_PATH),
-                    cert: fs.readFileSync(SSL_CERT_PATH)
-                };
-                
-                let httpsPort = await findAvailablePort(HTTPS_PORT);
-                if (!httpsPort) {
-                    console.warn(`⚠️  Não foi possível encontrar uma porta HTTPS disponível. Continuando apenas com HTTP.`);
-                } else {
-                    httpsServer = https.createServer(httpsOptions, app);
-                    httpsServer.listen(httpsPort, () => {
-                        console.log(`✅ Servidor HTTPS rodando na porta ${httpsPort}`);
-                        if (httpsPort !== HTTPS_PORT) {
-                            console.log(`   (Porta original ${HTTPS_PORT} estava ocupada)`);
-                        }
-                    });
-                    
-                    httpsServer.on('error', (err) => {
-                        console.error(`❌ Erro no servidor HTTPS:`, err.message);
-                        // Não encerra o processo, continua apenas com HTTP
-                    });
-                    
-                    httpsServer.timeout = 0;
-                }
-            } catch (sslError) {
-                console.warn(`⚠️  Erro ao configurar HTTPS: ${sslError.message}`);
-                console.warn(`   Continuando apenas com HTTP.`);
-            }
-        } else {
-            console.log(`ℹ️  Certificados SSL não configurados. Servidor rodando apenas em HTTP.`);
-            console.log(`   Para habilitar HTTPS, configure as variáveis de ambiente:`);
-            console.log(`   - SSL_KEY_PATH=/caminho/para/key.pem`);
-            console.log(`   - SSL_CERT_PATH=/caminho/para/cert.pem`);
-        }
-        
-        // Armazenar referências dos servidores para encerramento adequado
-        const servers = [httpServer];
-        if (httpsServer) servers.push(httpsServer);
+        server.timeout = 0;
 
         process.on('SIGINT', () => {
-            console.log('\n🛑 Encerrando servidores...');
-            // Fechar todos os servidores
-            servers.forEach((server, index) => {
-                server.close(() => {
-                    console.log(`✅ Servidor ${index === 0 ? 'HTTP' : 'HTTPS'} encerrado.`);
-                });
-            });
-            // Fechar banco de dados
             db.close((err) => {
                 if (err) console.error(err.message);
                 console.log('Conexão com o banco de dados fechada.');
-                process.exit(0);
-            });
-        });
-        
-        process.on('SIGTERM', () => {
-            console.log('\n🛑 Recebido SIGTERM, encerrando servidores...');
-            servers.forEach((server) => server.close());
-            db.close((err) => {
-                if (err) console.error(err.message);
                 process.exit(0);
             });
         });

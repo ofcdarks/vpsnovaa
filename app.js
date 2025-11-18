@@ -15,6 +15,92 @@ document.addEventListener('DOMContentLoaded', () => {
         return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     };
 
+    // Token Limits Dataset (Updated for 2024/2025 APIs)
+    // Replicado do token-limits.js para uso no frontend
+    const TOKEN_LIMITS_FRONTEND = {
+        'gpt-4o': { maxContextLength: 128000, maxOutputTokens: 16384 },
+        'gpt-4-turbo': { maxContextLength: 128000, maxOutputTokens: 16384 },
+        'gpt-3.5-turbo': { maxContextLength: 16385, maxOutputTokens: 4096 },
+        'claude-3-5-sonnet': { maxContextLength: 200000, maxOutputTokens: 8192 },
+        'claude-3-5-haiku': { maxContextLength: 200000, maxOutputTokens: 8192 },
+        'claude-3-opus': { maxContextLength: 200000, maxOutputTokens: 4096 },
+        'claude-3-sonnet': { maxContextLength: 200000, maxOutputTokens: 4096 },
+        'gemini-2.5-pro': { maxContextLength: 1000000, maxOutputTokens: 8192 },
+        'gemini-2.5-flash': { maxContextLength: 1000000, maxOutputTokens: 8192 },
+        'gemini-2.5-flash-lite': { maxContextLength: 1000000, maxOutputTokens: 8192 },
+        'gemini-1.5-pro': { maxContextLength: 2000000, maxOutputTokens: 8192 },
+        'gemini-1.5-flash': { maxContextLength: 1000000, maxOutputTokens: 8192 }
+    };
+
+    // Normaliza o nome de um modelo para facilitar matching
+    const normalizeModelName = (model) => {
+        return model.toLowerCase().replace(/_/g, '-').replace(/\s+/g, '').trim();
+    };
+
+    // Smart Matching entre modelo pedido e dataset de limites
+    const getTokenLimitsFrontend = (model) => {
+        const m = normalizeModelName(model);
+
+        // 1) Matching direto
+        if (TOKEN_LIMITS_FRONTEND[m]) {
+            return TOKEN_LIMITS_FRONTEND[m];
+        }
+
+        // 2) Matching por prefixos
+        const patterns = [
+            { key: 'gpt-4o', match: ['gpt-4o', 'gpt4o', 'gpt-4.1', 'gpt-4.0'] },
+            { key: 'gpt-4-turbo', match: ['gpt-4-turbo', 'gpt4turbo'] },
+            { key: 'gpt-3.5-turbo', match: ['gpt-3.5', 'gpt35'] },
+            { key: 'claude-3-5-sonnet', match: ['claude-3-5-sonnet', 'claude-3-5', 'claude-35-sonnet'] },
+            { key: 'claude-3-5-haiku', match: ['claude-3-5-haiku'] },
+            { key: 'claude-3-opus', match: ['claude-3-opus', 'opus'] },
+            { key: 'claude-3-sonnet', match: ['claude-3-sonnet'] },
+            { key: 'gemini-2.5-pro', match: ['gemini-2.5-pro'] },
+            { key: 'gemini-2.5-flash-lite', match: ['gemini-2.5-flash-lite'] },
+            { key: 'gemini-2.5-flash', match: ['gemini-2.5-flash'] },
+            { key: 'gemini-1.5-pro', match: ['gemini-1.5-pro'] },
+            { key: 'gemini-1.5-flash', match: ['gemini-1.5-flash'] }
+        ];
+
+        for (const p of patterns) {
+            for (const rule of p.match) {
+                if (m.includes(rule)) {
+                    return TOKEN_LIMITS_FRONTEND[p.key];
+                }
+            }
+        }
+
+        // 3) Matching genérico por tipo
+        if (m.includes('gpt-4')) return TOKEN_LIMITS_FRONTEND['gpt-4o'];
+        if (m.includes('gpt-3.5')) return TOKEN_LIMITS_FRONTEND['gpt-3.5-turbo'];
+        if (m.includes('claude-3-5')) return TOKEN_LIMITS_FRONTEND['claude-3-5-sonnet'];
+        if (m.includes('claude-3')) return TOKEN_LIMITS_FRONTEND['claude-3-sonnet'];
+        if (m.includes('gemini-2.5')) return TOKEN_LIMITS_FRONTEND['gemini-2.5-pro'];
+        if (m.includes('gemini-1.5')) return TOKEN_LIMITS_FRONTEND['gemini-1.5-pro'];
+        if (m.includes('gemini')) return TOKEN_LIMITS_FRONTEND['gemini-2.5-flash'];
+
+        // 4) Fallback conservador
+        console.warn(`⚠️ Modelo desconhecido: "${model}". Usando fallback conservador.`);
+        return { maxContextLength: 16000, maxOutputTokens: 4000 };
+    };
+
+    const splitTextIntoWordChunks = (text, maxWords) => {
+        if (!text || maxWords <= 0) return [];
+        const words = text.split(/\s+/).filter(Boolean);
+        if (words.length === 0) return [];
+        const chunks = [];
+        for (let i = 0; i < words.length; i += maxWords) {
+            const segmentWords = words.slice(i, i + maxWords);
+            chunks.push({
+                text: segmentWords.join(' '),
+                startIndex: i,
+                endIndex: i + segmentWords.length,
+                wordCount: segmentWords.length
+            });
+        }
+        return chunks;
+    };
+
     const browserPath = {
         dirname: (p) => {
             if (p === '/') return '/';
@@ -443,9 +529,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         panel.style.display = 'block';
-        const { current, total, message } = status; // Removed 'error' from destructuring
-        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
-        const isComplete = current === total && total > 0;
+        const {
+            current = 0,
+            total = 0,
+            message,
+            subMessage,
+            chunkTotal = 0,
+            chunkCurrent = 0
+        } = status;
+        const progress = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+        const isComplete = total > 0 && current >= total;
+        const safeChunkCurrent = chunkTotal > 0 ? Math.min(chunkCurrent, chunkTotal) : 0;
+        const chunkPercent = chunkTotal > 0 ? Math.min(100, Math.round((safeChunkCurrent / chunkTotal) * 100)) : 0;
 
         let title, titleColor, progressBarColor;
         // Error state is now handled by individual image cards, not the global progress panel
@@ -460,17 +555,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         panel.innerHTML = `
-            <h4 class="font-bold text-sm mb-2 ${titleColor}">
-                ${title}
-                <button class="float-right text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" onclick="document.getElementById('scene-gen-progress-panel').style.display = 'none';">
+            <div class="flex items-start justify-between mb-3">
+                <div class="flex-1">
+                    <h4 class="font-bold text-base ${titleColor} mb-1">${title}</h4>
+                    <p class="text-sm text-gray-700 dark:text-gray-300 font-medium" title="${message || ''}">${message || 'Preparando prompts...'}</p>
+                    ${subMessage ? `<p class="text-xs text-gray-500 dark:text-gray-400 mt-1.5">${subMessage}</p>` : ''}
+                </div>
+                <button class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 ml-2" onclick="document.getElementById('scene-gen-progress-panel').style.display = 'none';">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
                 </button>
-            </h4>
-            <p class="text-xs text-gray-700 dark:text-gray-300 mb-2 truncate" title="${message}">${message}</p>
-            <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                <div class="h-2 rounded-full ${progressBarColor}" style="width: ${progress}%;"></div>
             </div>
-            <p class="text-right text-xs text-gray-500 dark:text-gray-400 mt-1">${progress}% (${current}/${total})</p>
+            <div class="space-y-3">
+                <div>
+                    <div class="flex items-center justify-between text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                        <span>Progresso Geral</span>
+                        <span>${current}/${total || '?'} cena(s) - ${progress}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2.5">
+                        <div class="h-2.5 rounded-full ${progressBarColor} transition-all duration-300" style="width: ${progress}%;"></div>
+                    </div>
+                </div>
+                ${chunkTotal > 0 ? `
+                    <div>
+                        <div class="flex items-center justify-between text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                            <span>Progresso por Partes</span>
+                            <span>Parte ${safeChunkCurrent}/${chunkTotal}</span>
+                        </div>
+                        <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+                            <div class="h-2 rounded-full bg-indigo-500 transition-all duration-300" style="width: ${chunkPercent}%;"></div>
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
         `;
     };
 
@@ -503,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
         panel.innerHTML = `
             <h4 class="font-bold text-sm mb-2 ${titleColor}">
                 ${title}
-                <button class="float-right text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" onclick="document.getElementById('image-gen-progress-panel').style.display = 'none';">
+                <button class="float-right text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" onclick="if(confirm('Deseja realmente cancelar a geração de imagens?')) { appState.imageGenStatus.active = false; appState.imageGenStatus.cancelled = true; document.getElementById('image-gen-progress-panel').style.display = 'none'; }">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
                 </button>
             </h4>
@@ -661,9 +777,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const charCountEl = document.getElementById('tts-char-count');
         if (scriptInput) {
             scriptInput.value = '';
-            // Atualiza contador após limpar
+            // Atualiza contador após limpar (sem limite)
             if (charCountEl) {
-                charCountEl.textContent = '0/5000 caracteres';
+                charCountEl.textContent = '';
                 charCountEl.className = 'text-sm text-gray-500 dark:text-gray-400';
             }
         }
@@ -731,20 +847,16 @@ document.addEventListener('DOMContentLoaded', () => {
             updateCharCount();
         }
         
-        // Função para atualizar contador de caracteres
+        // Função para atualizar contador de caracteres (sem limite)
         function updateCharCount() {
             if (!scriptInput || !charCountEl) return;
             const currentLength = scriptInput.value.length;
-            const maxLength = 5000;
-            charCountEl.textContent = `${currentLength}/${maxLength} caracteres`;
-            
-            // Muda cor quando está próximo do limite
-            if (currentLength > maxLength * 0.9) {
-                charCountEl.className = 'text-sm text-orange-600 dark:text-orange-400 font-medium';
-            } else if (currentLength >= maxLength) {
-                charCountEl.className = 'text-sm text-red-600 dark:text-red-400 font-medium';
-            } else {
+            // Mostra apenas o total de caracteres, sem limite
+            if (currentLength > 0) {
+                charCountEl.textContent = `${currentLength.toLocaleString('pt-BR')} caracteres`;
                 charCountEl.className = 'text-sm text-gray-500 dark:text-gray-400';
+            } else {
+                charCountEl.textContent = '';
             }
         }
         
@@ -2932,12 +3044,14 @@ SAIDA: Use "[--PART N: TITULO--]" no inicio e "[--ENDPART--]" no final de cada p
                 final_check_instruction = `REVISAO CRITICA: ${form.parts} partes? CADA parte tem ${paragraphsPerPart} paragrafos? TOTAL de ~${targetWordsPerPart} palavras por parte (${minWordsPerParagraph}-${maxWordsPerParagraph} palavras/paragrafo)? Nenhuma parte esta curta? Tags corretas? Pontuacao completa? ${ctaCheck} Ultima parte com "[--ENDPART--]"?`;
             }
 
-            const prompt = `DARKSCRIP AI - Especialista em roteiros virais. Crie roteiro seguindo a formula abaixo.
+            const prompt = `DARKSCRIP AI - Especialista em roteiros virais. Crie roteiro seguindo EXATAMENTE a formula abaixo.
 
-REGRA: Comece DIRETAMENTE com [--PART 1: ... --] (ou narracao pura se voice-over). Sem introducoes.
+REGRA CRITICA: Comece DIRETAMENTE com [--PART 1: ... --] (ou narracao pura se voice-over). Sem introducoes.
 
-FORMULA:
-            ${removeAccents(formulaContent)}
+FORMULA OBRIGATORIA (SIGA TODAS AS INSTRUCOES):
+${removeAccents(formulaContent)}
+
+IMPORTANTE: Voce DEVE seguir TODAS as instrucoes da formula acima. Nao pule nenhuma etapa, nao resuma, nao modifique a estrutura. A formula e OBRIGATORIA.
 
 DIRETRIZES: Nicho: "${removeAccents(form.niche)}" | Publico: "${removeAccents(form.audience)}" | Tema: "${removeAccents(form.topic)}" | Tom: "${removeAccents(form.tone)}" | Lingua: "${removeAccents(form.lang)}" | Duracao: ${form.duration}min
 
@@ -4139,6 +4253,10 @@ ROTEIRO:
             const lang = document.getElementById('scene-lang')?.value;
             const includeText = document.getElementById('scene-include-text')?.checked;
             const characters = document.getElementById('scene-characters')?.value.trim();
+            
+            // Log para debug: verificar qual modelo foi selecionado
+            console.log(`🎬 Gerando prompts de cena com modelo: "${model}"`);
+            
             if (!text || !model || !imageModel || !lang) {
                 showSuccessToast("Por favor, preencha todos os campos.");
                 return;
@@ -4176,12 +4294,21 @@ ROTEIRO:
                 scenePromptResults.total_prompts = null; // Sera definido apos a resposta da IA
             }
 
-            const totalEstimate = mode === 'manual' ? chunks.length : estimatedScenes;
+            const totalEstimate = mode === 'manual' ? Math.max(chunks.length, 1) : Math.max(estimatedScenes, 1);
             const initialMessage = mode === 'manual'
                 ? `Gerando ${chunks.length} prompt(s) com blocos de ${wordCount} palavra(s)...`
                 : `A IA está analisando ${totalWords} palavras para sugerir cerca de ${estimatedScenes} cenas (entre ${minScenes} e ${maxScenes}, se necessário).`;
 
-            appState.sceneGenStatus = { active: true, current: 0, total: totalEstimate, message: initialMessage, error: false };
+            appState.sceneGenStatus = { 
+                active: true, 
+                current: 0, 
+                total: totalEstimate, 
+                message: initialMessage, 
+                subMessage: '',
+                chunkTotal: 0,
+                chunkCurrent: 0,
+                error: false 
+            };
             renderSceneGenerationProgress(appState.sceneGenStatus);
             addToLog(mode === 'manual'
                 ? `A gerar ${chunks.length} prompt(s) com blocos de ${wordCount} palavra(s)...`
@@ -4201,22 +4328,39 @@ ROTEIRO:
 
                     for (let index = 0; index < chunks.length; index++) { // Use let for index
                         const chunk = chunks[index];
-                        const prompt = `Analise contexto geral, depois foque no trecho especifico. Gere 1 prompt de imagem em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} JSON: {prompt_text, scene_description (PT), original_text}.\n\nCONTEXTO:\n"""${removeAccents(text)}"""\n\nTRECHO:\n"""${removeAccents(chunk)}"""`;
+                        const prompt = `Analise contexto geral, depois foque no trecho especifico. Gere 1 prompt de imagem em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON objeto valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: {"prompt_text": "...", "scene_description": "...", "original_text": "..."}
+- O JSON deve ser valido e completo, sem cortes
+
+CONTEXTO:
+"""${removeAccents(text)}"""
+
+TRECHO:
+"""${removeAccents(chunk)}"""`;
                         
-                        appState.sceneGenStatus.current = index + 1;
-                        appState.sceneGenStatus.message = `A gerar prompt para a cena ${index + 1} (trecho ${index + 1} de ${chunks.length})...`;
+                        appState.sceneGenStatus.subMessage = `Trecho ${index + 1} de ${chunks.length}`;
+                        appState.sceneGenStatus.message = `Gerando cena ${index + 1} de ${chunks.length}...`;
                         renderSceneGenerationProgress(appState.sceneGenStatus);
 
                         let retries = 3;
                         let success = false;
                         while (retries > 0 && !success) {
                             try {
+                                console.log(`📤 Enviando requisição para API: modelo="${model}"`);
                                 const result = await apiRequest('/api/generate', 'POST', { 
                                     prompt, 
                                     model, 
                                     schema,
                                     maxOutputTokens: 4096
                                 });
+                                console.log(`✅ Resposta recebida da API para modelo "${model}"`);
                                 
                                 // Tratamento robusto da resposta
                                 let sceneData = null;
@@ -4246,6 +4390,10 @@ ROTEIRO:
                                 
                                 if (sceneData && sceneData.prompt_text) {
                                     scenePromptResults.data.push(sceneData);
+                                    appState.sceneGenStatus.current = scenePromptResults.data.length;
+                                    appState.sceneGenStatus.message = `Cena ${scenePromptResults.data.length}/${chunks.length} pronta.`;
+                                    appState.sceneGenStatus.subMessage = `Trecho ${index + 1} concluído`;
+                                    renderSceneGenerationProgress(appState.sceneGenStatus);
                                     success = true;
                                 } else {
                                     throw new Error(`Formato de resposta inválido para cena ${index + 1}`);
@@ -4256,12 +4404,16 @@ ROTEIRO:
                                     error.message.includes('JSON') || 
                                     error.message.includes('malformado') ||
                                     error.message.includes('incompleto') ||
-                                    error.message.includes('parse')
+                                    error.message.includes('parse') ||
+                                    error.message.includes('Unexpected')
                                 );
                                 
                                 if (isJsonError && retries > 0) {
-                                    addToLog(`Erro de JSON na cena ${index + 1}. Tentando novamente... (${retries} tentativas restantes)`, true);
+                                    addToLog(`Erro de JSON na cena ${index + 1}. Tentando novamente com instruções mais explícitas... (${retries} tentativas restantes)`, true);
+                                    // Adicionar instrução mais explícita no retry
+                                    prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON objeto, sem nenhum texto adicional. O JSON deve começar com { e terminar com }. Todas as strings entre aspas duplas.`;
                                     await new Promise(resolve => setTimeout(resolve, 2000));
+                                    continue; // Tenta novamente com o prompt melhorado
                                 } else if (retries > 0) {
                                     addToLog(`Erro na cena ${index + 1}. Tentando novamente... (${retries} tentativas restantes)`, true);
                                     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -4276,34 +4428,79 @@ ROTEIRO:
                             addToLog(`Nao foi possivel gerar prompt para a cena ${index + 1} apos 3 tentativas.`, true);
                         }
                         // Otimização 4: Adicionar delay fixo
-                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        await new Promise(resolve => setTimeout(resolve, 800));
                     }
+
+                    scenePromptResults.total_prompts = scenePromptResults.data.length;
+                    appState.sceneGenStatus.current = scenePromptResults.data.length;
+                    appState.sceneGenStatus.total = Math.max(appState.sceneGenStatus.total, scenePromptResults.data.length);
+                    appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s) (modo manual).`;
+                    appState.sceneGenStatus.subMessage = `Total final: ${scenePromptResults.data.length} cena(s).`;
+                    renderSceneGenerationProgress(appState.sceneGenStatus);
                 } else { // MODO AUTOMATICO
-                    let schema;
-                    let prompt;
-                    const autoSceneGuidance = `Roteiro: ~${totalWords} palavras. Gere ${minScenes}-${maxScenes} cenas (ideal: ${estimatedScenes}). Cobertura completa, ordem cronologica.`;
-                    if (model.startsWith('gpt-')) {
-                        schema = {
-                            type: "OBJECT",
-                            properties: {
-                                scenes: {
-                                    type: "ARRAY",
-                                    items: {
-                                        type: "OBJECT",
-                                        properties: {
-                                            scene_description: { type: "STRING" },
-                                            prompt_text: { type: "STRING" },
-                                            original_text: { type: "STRING" }
-                                        },
-                                        required: ["scene_description", "prompt_text", "original_text"]
-                                    }
-                                }
-                            },
-                            required: ["scenes"]
-                        };
-                        prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} JSON: {scenes: [{prompt_text, scene_description (PT), original_text}]}.\n\nROTEIRO:\n"""${removeAccents(text)}"""`;
-                    } else {
-                        schema = {
+                    // PRIMEIRO: Analisar todo o roteiro para calcular quantidade EXATA de prompts
+                    addToLog(`Analisando roteiro completo (${totalWords} palavras) para calcular quantidade exata de prompts...`, false);
+                    appState.sceneGenStatus.message = `Analisando roteiro completo...`;
+                    appState.sceneGenStatus.subMessage = `Calculando quantidade exata de prompts necessários`;
+                    renderSceneGenerationProgress(appState.sceneGenStatus);
+                    
+                    // Função auxiliar para estimar tokens (aproximação: ~3.5 caracteres por token)
+                    const estimateTokens = (text) => Math.ceil(text.length / 3.5);
+                    
+                    // Obter limites do modelo selecionado usando a função de matching inteligente
+                    const tokenLimits = getTokenLimitsFrontend(model);
+                    const maxContextLength = tokenLimits.maxContextLength;
+                    const maxOutputTokens = tokenLimits.maxOutputTokens;
+                    
+                    console.log(`📊 Limites de tokens para modelo "${model}": Contexto=${maxContextLength}, Saída=${maxOutputTokens}`);
+                    
+                    // Calcular tokens do prompt base
+                    const basePromptTemplate = `Diretor de arte: Divida roteiro em cenas visuais logicas. Roteiro: ~${totalWords} palavras. Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} JSON array: [{prompt_text, scene_description (PT), original_text}].\n\nROTEIRO:\n"""`;
+                    const basePromptTokens = estimateTokens(basePromptTemplate);
+                    const scriptTokens = estimateTokens(text);
+                    const availableTokensForOutput = maxContextLength - basePromptTokens - scriptTokens - 500; // Margem de segurança
+                    
+                    // Calcular quantidade exata de prompts baseado nos tokens disponíveis
+                    // Cada prompt de cena usa aproximadamente: 150 tokens (prompt_text) + 50 tokens (scene_description) + 100 tokens (original_text) = ~300 tokens por cena
+                    const tokensPerScene = 300;
+                    const maxScenesByTokens = Math.floor(availableTokensForOutput / tokensPerScene);
+                    
+                    // Calcular quantidade baseada em palavras (1 cena a cada ~90 palavras)
+                    const scenesByWords = Math.max(1, Math.round(totalWords / 90));
+                    
+                    // Usar o menor valor entre os dois cálculos para garantir que cabe nos tokens
+                    const exactSceneCount = Math.min(maxScenesByTokens, scenesByWords, maxScenes);
+                    
+                    console.log(`📊 Análise do roteiro:`);
+                    console.log(`   Palavras: ${totalWords}`);
+                    console.log(`   Tokens do script: ~${scriptTokens}`);
+                    console.log(`   Tokens disponíveis para saída: ~${availableTokensForOutput}`);
+                    console.log(`   Cenas calculadas por palavras: ${scenesByWords}`);
+                    console.log(`   Cenas máximas por tokens: ${maxScenesByTokens}`);
+                    console.log(`   ✅ Quantidade EXATA de prompts: ${exactSceneCount}`);
+                    
+                    addToLog(`Quantidade exata calculada: ${exactSceneCount} prompts de cena`, false);
+                    
+                    // Normalizar nome do modelo para verificações
+                    const modelLower = normalizeModelName(model);
+                    const isGeminiModel = modelLower.includes('gemini');
+                    const isFlashLite = modelLower.includes('flash-lite');
+                    const isFlash = modelLower.includes('flash') && !isFlashLite;
+                    const isPro = modelLower.includes('pro');
+                    
+                    // Verificar se precisa de chunking baseado nos limites de tokens
+                    const totalPromptTokens = basePromptTokens + scriptTokens;
+                    const shouldUseChunkedAuto = totalPromptTokens > (maxContextLength * 0.7); // Usa chunking se usar mais de 70% do contexto
+                    
+                    // Ajustar limites de chunking baseado no modelo
+                    const AUTO_CHUNK_WORD_THRESHOLD = isFlashLite ? 1000 : (isFlash ? 600 : 800);
+                    const MAX_WORDS_PER_AUTO_CHUNK = isFlashLite ? 450 : (isFlash ? 250 : (isPro ? 350 : 450));
+                    
+                    // Usar quantidade EXATA calculada
+                    const autoSceneGuidance = `Roteiro: ~${totalWords} palavras. Gere EXATAMENTE ${exactSceneCount} cenas. Cobertura completa, ordem cronologica. IMPORTANTE: Voce DEVE gerar EXATAMENTE ${exactSceneCount} cenas, nem mais nem menos.`;
+
+                    if (shouldUseChunkedAuto) {
+                        const chunkSchema = {
                             type: "ARRAY",
                             items: {
                                 type: "OBJECT",
@@ -4315,88 +4512,411 @@ ROTEIRO:
                                 required: ["scene_description", "prompt_text", "original_text"]
                             }
                         };
-                        prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} JSON array: [{prompt_text, scene_description (PT), original_text}].\n\nROTEIRO:\n"""${removeAccents(text)}"""`;
-                    }
-                    
-                    let result;
-                    let scenesData;
-                    let retries = 3;
-                    
-                    while (retries > 0) {
-                        try {
-                            result = await apiRequest('/api/generate', 'POST', { 
-                                prompt, 
-                                model, 
-                                schema,
-                                maxOutputTokens: 8192
-                            });
+
+                        addToLog("Texto extenso detectado. Gemini sera processado em partes para evitar limite de tokens.", false);
+                        const chunkedSegments = splitTextIntoWordChunks(text, MAX_WORDS_PER_AUTO_CHUNK);
+                        if (!chunkedSegments.length) {
+                            throw new Error("Nao foi possivel preparar o roteiro para o modo automatico.");
+                        }
+
+                        // Usar quantidade EXATA calculada para o total
+                        appState.sceneGenStatus.total = exactSceneCount;
+                        appState.sceneGenStatus.chunkTotal = chunkedSegments.length;
+                        appState.sceneGenStatus.chunkCurrent = 0;
+                        appState.sceneGenStatus.subMessage = `Preparando parte 1/${chunkedSegments.length} (${exactSceneCount} cenas totais)`;
+                        renderSceneGenerationProgress(appState.sceneGenStatus);
+                        let accumulatedScenes = 0;
+
+                        for (let chunkIndex = 0; chunkIndex < chunkedSegments.length; chunkIndex++) {
+                            const currentChunk = chunkedSegments[chunkIndex];
+                            const chunkRatio = currentChunk.wordCount / totalWords;
+                            // Calcular quantidade de cenas para este chunk baseado na quantidade EXATA total
+                            const chunkSceneTarget = Math.max(1, Math.round(chunkRatio * exactSceneCount));
+                            // Flash precisa de limite menor de cenas por chunk (2 máximo), Pro e Flash Lite podem ter até 4
+                            const maxScenesPerChunk = isFlash ? 2 : (isPro ? 3 : 4);
+                            const chunkSceneCap = Math.max(1, Math.min(maxScenesPerChunk, chunkSceneTarget + 1));
+                            const chunkMinScenes = Math.max(1, Math.min(chunkSceneCap, chunkSceneTarget));
+                            const chunkMaxScenes = chunkSceneCap;
+                            const chunkPercent = Math.max(1, Math.round(chunkRatio * 100));
+                            // Ajustar maxOutputTokens baseado no modelo (Flash precisa de muito mais tokens, Pro moderado)
+                            const baseTokensPerScene = isFlash ? 800 : (isPro ? 600 : (isFlashLite ? 500 : 500));
+                            const chunkMaxOutputTokens = Math.min(8192, Math.max(1500, chunkMaxScenes * baseTokensPerScene));
+
+                            appState.sceneGenStatus.chunkCurrent = chunkIndex + 1;
+                            appState.sceneGenStatus.message = `Processando parte ${chunkIndex + 1}/${chunkedSegments.length}`;
+                            appState.sceneGenStatus.subMessage = `Meta: ${chunkMinScenes}-${chunkMaxScenes} cena(s) (~${chunkPercent}% do roteiro)`;
+                            renderSceneGenerationProgress(appState.sceneGenStatus);
+
+                            // Ajustar instruções de concisão baseado no modelo (Flash precisa ser ainda mais conciso)
+                            const maxDescWords = isFlash ? '10-15' : '15-25';
+                            const maxPromptWords = isFlash ? '40' : '50';
+                            const concisenessNote = isFlash ? ' EXTREMAMENTE CONCISO. Evite palavras desnecessárias.' : '';
                             
-                            // Tratamento robusto da resposta
-                            if (model.startsWith('gpt-')) {
-                                scenesData = result.data?.scenes || result.data?.data?.scenes;
-                            } else {
-                                // Para Gemini, pode vir como array direto ou dentro de um objeto
-                                if (Array.isArray(result.data)) {
-                                    scenesData = result.data;
-                                } else if (result.data?.scenes && Array.isArray(result.data.scenes)) {
-                                    scenesData = result.data.scenes;
-                                } else if (result.data?.data && Array.isArray(result.data.data)) {
-                                    scenesData = result.data.data;
-                                } else {
-                                    scenesData = result.data;
+                            const chunkPrompt = `Diretor de arte: Divida o roteiro em cenas visuais logicas. Este e o trecho ${chunkIndex + 1} de ${chunkedSegments.length} (aprox. ${currentChunk.wordCount} palavras, ${chunkPercent}% do roteiro). Gere EXATAMENTE entre ${chunkMinScenes} e ${chunkMaxScenes} cenas novas e cronologicas EXCLUSIVAMENTE para este trecho. NAO ultrapasse ${chunkMaxScenes} cenas. Continue a numeracao a partir da cena ${accumulatedScenes + 1}, sem repetir eventos ja descritos. IMPORTANTE: Cada scene_description deve ter no maximo 1 frase curta em PT-BR (${maxDescWords} palavras). Cada prompt_text em INGLES deve ter no maximo ${maxPromptWords} palavras.${concisenessNote} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON array valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]
+- O JSON deve ser valido e completo, sem cortes
+
+TRECHO FOCAL:
+"""${removeAccents(currentChunk.text)}"""`;
+
+                            let retries = 3;
+                            let chunkScenes = null;
+
+                            while (retries > 0) {
+                                try {
+                                    console.log(`📤 Enviando chunk ${chunkIndex + 1} para API: modelo="${model}"`);
+                                    const chunkResult = await apiRequest('/api/generate', 'POST', { 
+                                        prompt: chunkPrompt, 
+                                        model, 
+                                        schema: chunkSchema,
+                                        maxOutputTokens: chunkMaxOutputTokens
+                                    });
+                                    console.log(`✅ Chunk ${chunkIndex + 1} recebido da API para modelo "${model}"`);
+
+                                    if (Array.isArray(chunkResult.data)) {
+                                        chunkScenes = chunkResult.data;
+                                    } else if (chunkResult.data?.scenes && Array.isArray(chunkResult.data.scenes)) {
+                                        chunkScenes = chunkResult.data.scenes;
+                                    } else if (chunkResult.data?.data && Array.isArray(chunkResult.data.data)) {
+                                        chunkScenes = chunkResult.data.data;
+                                    } else {
+                                        chunkScenes = chunkResult.data;
+                                    }
+
+                                    if (!Array.isArray(chunkScenes) || chunkScenes.length === 0) {
+                                        throw new Error("A IA nao retornou prompts de cena validos para este trecho.");
+                                    }
+
+                                    const validScenes = chunkScenes.filter(scene =>
+                                        scene &&
+                                        (scene.prompt_text || scene.prompt) &&
+                                        typeof (scene.prompt_text || scene.prompt) === 'string'
+                                    );
+
+                                    if (!validScenes.length) {
+                                        throw new Error("As cenas retornadas nao possuem estrutura valida.");
+                                    }
+
+                                    const normalized = validScenes.map((scene, localIndex) => ({
+                                        scene_description: scene.scene_description || scene.description || `Cena ${accumulatedScenes + localIndex + 1}`,
+                                        prompt_text: scene.prompt_text || scene.prompt || '',
+                                        original_text: scene.original_text || scene.original || scene.text || currentChunk.text
+                                    }));
+
+                                    scenePromptResults.data.push(...normalized);
+                                    accumulatedScenes += normalized.length;
+                                    appState.sceneGenStatus.current = Math.min(exactSceneCount, accumulatedScenes);
+                                    // Garantir que não ultrapasse a quantidade exata calculada
+                                    if (scenePromptResults.data.length > exactSceneCount) {
+                                        scenePromptResults.data = scenePromptResults.data.slice(0, exactSceneCount);
+                                        accumulatedScenes = exactSceneCount;
+                                    }
+                                    appState.sceneGenStatus.subMessage = `Parte ${chunkIndex + 1}/${chunkedSegments.length} concluida (${appState.sceneGenStatus.current}/${appState.sceneGenStatus.total} cenas).`;
+                                    renderSceneGenerationProgress(appState.sceneGenStatus);
+                                    break;
+                                } catch (chunkError) {
+                                    const isMaxTokensError = chunkError.message && (
+                                        chunkError.message.includes('MAX_TOKENS') ||
+                                        chunkError.message.includes('maxOutputTokens') ||
+                                        chunkError.message.includes('limite de tokens') ||
+                                        chunkError.message.includes('vazia ou malformada')
+                                    );
+                                    
+                                    const isJsonError = chunkError.message && (
+                                        chunkError.message.includes('JSON') ||
+                                        chunkError.message.includes('malformado') ||
+                                        chunkError.message.includes('incompleto') ||
+                                        chunkError.message.includes('parse') ||
+                                        chunkError.message.includes('Unexpected')
+                                    );
+                                    
+                                    if (isMaxTokensError && retries > 0) {
+                                        // Se foi MAX_TOKENS, reduzir ainda mais o número de cenas esperadas
+                                        const reducedMaxScenes = Math.max(1, chunkMaxScenes - 1);
+                                        const reducedMinScenes = Math.max(1, chunkMinScenes - 1);
+                                        const reducedPrompt = chunkPrompt.replace(
+                                            new RegExp(`Gere EXATAMENTE entre ${chunkMinScenes} e ${chunkMaxScenes} cenas`),
+                                            `Gere EXATAMENTE entre ${reducedMinScenes} e ${reducedMaxScenes} cenas`
+                                        ).replace(
+                                            new RegExp(`NAO ultrapasse ${chunkMaxScenes} cenas`),
+                                            `NAO ultrapasse ${reducedMaxScenes} cenas`
+                                        );
+                                        
+                                        addToLog(`Parte ${chunkIndex + 1}: limite de tokens atingido. Reduzindo para ${reducedMinScenes}-${reducedMaxScenes} cenas...`, true);
+                                        
+                                        try {
+                                            const reducedBaseTokensPerScene = isFlash ? 800 : (isPro ? 600 : (isFlashLite ? 500 : 500));
+                                            const reducedResult = await apiRequest('/api/generate', 'POST', { 
+                                                prompt: reducedPrompt, 
+                                                model, 
+                                                schema: chunkSchema,
+                                                maxOutputTokens: Math.min(8192, Math.max(1500, reducedMaxScenes * reducedBaseTokensPerScene))
+                                            });
+                                            
+                                            if (Array.isArray(reducedResult.data)) {
+                                                chunkScenes = reducedResult.data;
+                                            } else if (reducedResult.data?.scenes && Array.isArray(reducedResult.data.scenes)) {
+                                                chunkScenes = reducedResult.data.scenes;
+                                            } else if (reducedResult.data?.data && Array.isArray(reducedResult.data.data)) {
+                                                chunkScenes = reducedResult.data.data;
+                                            } else {
+                                                chunkScenes = reducedResult.data;
+                                            }
+                                            
+                                            if (Array.isArray(chunkScenes) && chunkScenes.length > 0) {
+                                                const validScenes = chunkScenes.filter(scene =>
+                                                    scene &&
+                                                    (scene.prompt_text || scene.prompt) &&
+                                                    typeof (scene.prompt_text || scene.prompt) === 'string'
+                                                );
+                                                
+                                                if (validScenes.length > 0) {
+                                                    const normalized = validScenes.map((scene, localIndex) => ({
+                                                        scene_description: scene.scene_description || scene.description || `Cena ${accumulatedScenes + localIndex + 1}`,
+                                                        prompt_text: scene.prompt_text || scene.prompt || '',
+                                                        original_text: scene.original_text || scene.original || scene.text || currentChunk.text
+                                                    }));
+                                                    
+                                                    scenePromptResults.data.push(...normalized);
+                                                    accumulatedScenes += normalized.length;
+                                                    appState.sceneGenStatus.current = Math.min(exactSceneCount, accumulatedScenes);
+                                                    // Garantir que não ultrapasse a quantidade exata calculada
+                                                    if (scenePromptResults.data.length > exactSceneCount) {
+                                                        scenePromptResults.data = scenePromptResults.data.slice(0, exactSceneCount);
+                                                        accumulatedScenes = exactSceneCount;
+                                                    }
+                                                    appState.sceneGenStatus.subMessage = `Parte ${chunkIndex + 1}/${chunkedSegments.length} concluida (${appState.sceneGenStatus.current}/${appState.sceneGenStatus.total} cenas).`;
+                                                    renderSceneGenerationProgress(appState.sceneGenStatus);
+                                                    break;
+                                                }
+                                            }
+                                        } catch (reducedError) {
+                                            retries--;
+                                            if (retries === 0) {
+                                                throw new Error(`Falha ao gerar cenas para a parte ${chunkIndex + 1} mesmo com redução: ${reducedError.message}`);
+                                            }
+                                            addToLog(`Parte ${chunkIndex + 1}: erro persistente. Tentando novamente... (${retries} restante)`, true);
+                                            await new Promise(resolve => setTimeout(resolve, 2000));
+                                        }
+                                    } else if (isJsonError && retries > 0) {
+                                        // Erro de JSON - tentar novamente com prompt mais explícito
+                                        addToLog(`Parte ${chunkIndex + 1}: erro de JSON detectado. Tentando novamente com instruções mais explícitas... (${retries} restante)`, true);
+                                        
+                                        // Adicionar instrução ainda mais explícita no retry
+                                        chunkPrompt = `${chunkPrompt}\n\nLEMBRE-SE: Retorne APENAS o JSON array, sem nenhum texto adicional. O JSON deve começar com [ e terminar com ]. Todas as strings entre aspas duplas.`;
+                                        
+                                        retries--;
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                        continue; // Tenta novamente com o prompt melhorado
+                                    } else {
+                                        retries--;
+                                        if (retries === 0) {
+                                            throw new Error(`Falha ao gerar cenas para a parte ${chunkIndex + 1}: ${chunkError.message}`);
+                                        }
+                                        addToLog(`Parte ${chunkIndex + 1}: erro (${chunkError.message}). Tentando novamente... (${retries} restante)`, true);
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                    }
                                 }
                             }
-                            
-                            // Validar se scenesData é um array válido
-                            if (Array.isArray(scenesData) && scenesData.length > 0) {
-                                // Validar estrutura de cada item
-                                const validScenes = scenesData.filter(scene => 
-                                    scene && 
-                                    (scene.prompt_text || scene.prompt) &&
-                                    typeof (scene.prompt_text || scene.prompt) === 'string'
+
+                            appState.sceneGenStatus.message = `Parte ${chunkIndex + 1}/${chunkedSegments.length} concluida.`;
+                            renderSceneGenerationProgress(appState.sceneGenStatus);
+                        }
+
+                        // Garantir que temos exatamente a quantidade calculada
+                        if (scenePromptResults.data.length > exactSceneCount) {
+                            scenePromptResults.data = scenePromptResults.data.slice(0, exactSceneCount);
+                        } else if (scenePromptResults.data.length < exactSceneCount) {
+                            addToLog(`⚠️ Aviso: Foram geradas ${scenePromptResults.data.length} cenas, mas ${exactSceneCount} foram calculadas.`, true);
+                        }
+                        
+                        scenePromptResults.total_prompts = scenePromptResults.data.length;
+                        appState.sceneGenStatus.current = scenePromptResults.data.length;
+                        appState.sceneGenStatus.total = exactSceneCount;
+                        appState.sceneGenStatus.chunkCurrent = chunkedSegments.length;
+                        appState.sceneGenStatus.subMessage = `Todas as partes finalizadas (${scenePromptResults.data.length}/${exactSceneCount} cenas).`;
+                        appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s) (calculado: ${exactSceneCount}).`;
+                        renderSceneGenerationProgress(appState.sceneGenStatus);
+                    } else {
+                        let schema;
+                        let prompt;
+                        if (model.startsWith('gpt-')) {
+                            schema = {
+                                type: "OBJECT",
+                                properties: {
+                                    scenes: {
+                                        type: "ARRAY",
+                                        items: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                scene_description: { type: "STRING" },
+                                                prompt_text: { type: "STRING" },
+                                                original_text: { type: "STRING" }
+                                            },
+                                            required: ["scene_description", "prompt_text", "original_text"]
+                                        }
+                                    }
+                                },
+                                required: ["scenes"]
+                            };
+                            prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON objeto valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: {"scenes": [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]}
+- O JSON deve ser valido e completo, sem cortes
+
+ROTEIRO:
+"""${removeAccents(text)}"""`;
+                        } else {
+                            schema = {
+                                type: "ARRAY",
+                                items: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        scene_description: { type: "STRING" },
+                                        prompt_text: { type: "STRING" },
+                                        original_text: { type: "STRING" }
+                                    },
+                                    required: ["scene_description", "prompt_text", "original_text"]
+                                }
+                            };
+                            prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON array valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]
+- O JSON deve ser valido e completo, sem cortes
+
+ROTEIRO:
+"""${removeAccents(text)}"""`;
+                        }
+
+                        let result;
+                        let scenesData;
+                        let retries = 3;
+
+                        // Calcular maxOutputTokens baseado na quantidade exata de cenas
+                        // Cada cena usa ~300 tokens, então precisamos de tokens suficientes para todas as cenas
+                        const tokensNeededForScenes = exactSceneCount * 300;
+                        const nonChunkedMaxTokens = Math.min(maxOutputTokens, Math.max(4096, tokensNeededForScenes + 1000)); // Margem de segurança
+                        
+                        console.log(`📊 Requisição completa: ${exactSceneCount} cenas, ~${tokensNeededForScenes} tokens necessários, usando ${nonChunkedMaxTokens} tokens máximo`);
+                        
+                        while (retries > 0) {
+                            try {
+                                console.log(`📤 Enviando requisição completa para API: modelo="${model}"`);
+                                result = await apiRequest('/api/generate', 'POST', { 
+                                    prompt, 
+                                    model, 
+                                    schema,
+                                    maxOutputTokens: nonChunkedMaxTokens
+                                });
+                                console.log(`✅ Resposta completa recebida da API para modelo "${model}"`);
+                                
+                                if (model.startsWith('gpt-')) {
+                                    scenesData = result.data?.scenes || result.data?.data?.scenes;
+                                } else {
+                                    if (Array.isArray(result.data)) {
+                                        scenesData = result.data;
+                                    } else if (result.data?.scenes && Array.isArray(result.data.scenes)) {
+                                        scenesData = result.data.scenes;
+                                    } else if (result.data?.data && Array.isArray(result.data.data)) {
+                                        scenesData = result.data.data;
+                                    } else {
+                                        scenesData = result.data;
+                                    }
+                                }
+                                
+                                if (Array.isArray(scenesData) && scenesData.length > 0) {
+                                    const validScenes = scenesData.filter(scene => 
+                                        scene && 
+                                        (scene.prompt_text || scene.prompt) &&
+                                        typeof (scene.prompt_text || scene.prompt) === 'string'
+                                    );
+                                    
+                                    if (validScenes.length > 0) {
+                                        scenesData = validScenes.map(scene => ({
+                                            scene_description: scene.scene_description || scene.description || `Cena ${scenesData.indexOf(scene) + 1}`,
+                                            prompt_text: scene.prompt_text || scene.prompt || '',
+                                            original_text: scene.original_text || scene.original || scene.text || ''
+                                        }));
+                                        break;
+                                    }
+                                }
+                                
+                                if (retries > 1) {
+                                    console.warn(`Tentativa ${4 - retries} falhou. Resposta recebida:`, result);
+                                    addToLog(`Tentando novamente... (${retries - 1} tentativas restantes)`, false);
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    retries--;
+                                } else {
+                                    throw new Error("A IA nao retornou prompts de cena validos no formato esperado.");
+                                }
+                            } catch (error) {
+                                const isJsonError = error.message && (
+                                    error.message.includes('JSON') ||
+                                    error.message.includes('malformado') ||
+                                    error.message.includes('incompleto') ||
+                                    error.message.includes('parse') ||
+                                    error.message.includes('Unexpected')
                                 );
                                 
-                                if (validScenes.length > 0) {
-                                    // Normalizar estrutura
-                                    scenesData = validScenes.map(scene => ({
-                                        scene_description: scene.scene_description || scene.description || `Cena ${scenesData.indexOf(scene) + 1}`,
-                                        prompt_text: scene.prompt_text || scene.prompt || '',
-                                        original_text: scene.original_text || scene.original || scene.text || ''
-                                    }));
-                                    break; // Sucesso, sai do loop
+                                if (isJsonError && retries > 0) {
+                                    // Erro de JSON - adicionar instrução mais explícita no retry
+                                    addToLog(`Erro de JSON detectado. Tentando novamente com instruções mais explícitas... (${retries} restante)`, true);
+                                    if (model.startsWith('gpt-')) {
+                                        prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON objeto válido, sem nenhum texto adicional. O JSON deve começar com { e terminar com }. Todas as strings entre aspas duplas.`;
+                                    } else {
+                                        prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON array válido, sem nenhum texto adicional. O JSON deve começar com [ e terminar com ]. Todas as strings entre aspas duplas.`;
+                                    }
                                 }
-                            }
-                            
-                            // Se chegou aqui, a resposta não está no formato esperado
-                            if (retries > 1) {
-                                console.warn(`Tentativa ${4 - retries} falhou. Resposta recebida:`, result);
-                                addToLog(`Tentando novamente... (${retries - 1} tentativas restantes)`, false);
-                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                
                                 retries--;
-                            } else {
-                                throw new Error("A IA nao retornou prompts de cena validos no formato esperado.");
+                                if (retries === 0) {
+                                    console.error('Erro após todas as tentativas:', error);
+                                    throw new Error(`Falha ao gerar prompts de cena após 3 tentativas: ${error.message}`);
+                                }
+                                console.warn(`Erro na tentativa ${4 - retries}:`, error.message);
+                                await new Promise(resolve => setTimeout(resolve, 2000));
                             }
-                        } catch (error) {
-                            retries--;
-                            if (retries === 0) {
-                                console.error('Erro após todas as tentativas:', error);
-                                throw new Error(`Falha ao gerar prompts de cena após 3 tentativas: ${error.message}`);
-                            }
-                            console.warn(`Erro na tentativa ${4 - retries}:`, error.message);
-                            await new Promise(resolve => setTimeout(resolve, 2000));
                         }
+                        
+                        if (!scenesData || !Array.isArray(scenesData) || scenesData.length === 0) {
+                            throw new Error("A IA nao retornou prompts de cena validos.");
+                        }
+                        
+                        // Garantir que temos exatamente a quantidade calculada
+                        if (scenesData.length > exactSceneCount) {
+                            scenesData = scenesData.slice(0, exactSceneCount);
+                            addToLog(`Ajustado: ${scenesData.length} cenas (calculado: ${exactSceneCount})`, false);
+                        } else if (scenesData.length < exactSceneCount) {
+                            addToLog(`⚠️ Aviso: Foram geradas ${scenesData.length} cenas, mas ${exactSceneCount} foram calculadas.`, true);
+                        }
+                        
+                        scenePromptResults.data.push(...scenesData);
+                        scenePromptResults.total_prompts = scenePromptResults.data.length;
+                        appState.sceneGenStatus.current = scenePromptResults.data.length;
+                        appState.sceneGenStatus.total = exactSceneCount;
+                        appState.sceneGenStatus.subMessage = `Roteiro dividido automaticamente (${scenePromptResults.data.length}/${exactSceneCount} cenas).`;
+                        appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s) (calculado: ${exactSceneCount}).`;
+                        renderSceneGenerationProgress(appState.sceneGenStatus);
                     }
-                    
-                    if (!scenesData || !Array.isArray(scenesData) || scenesData.length === 0) {
-                        throw new Error("A IA nao retornou prompts de cena validos.");
-                    }
-                    
-                    scenePromptResults.data.push(...scenesData);
-                    scenePromptResults.total_prompts = scenePromptResults.data.length;
-                    appState.sceneGenStatus.current = scenePromptResults.data.length;
-                    appState.sceneGenStatus.total = scenePromptResults.data.length;
-                    appState.sceneGenStatus.message = `Roteiro dividido em ${scenePromptResults.data.length} cena(s).`;
-                    renderSceneGenerationProgress(appState.sceneGenStatus);
                 }
 
                 scenePromptResults.currentPage = 1;
@@ -4771,6 +5291,11 @@ ${scriptText}
                     };
 
                     const processTask = async (task) => {
+                        // Verificar se foi cancelado
+                        if (appState.imageGenStatus.cancelled) {
+                            return;
+                        }
+                        
                         const { prompt: currentPrompt, sceneNumber: currentSceneNumber, imageIndex: currentImageIndex } = task;
                         try {
                             const res = await apiRequest('/api/imagefx/generate', 'POST', {
@@ -4801,8 +5326,36 @@ ${scriptText}
                         } catch (error) {
                             console.error(`Erro na geração ImageFX para o prompt ${currentSceneNumber}:`, error.stack || error);
                             const userFriendlyMessage = error.message || 'Erro desconhecido.';
+                            const errorLower = userFriendlyMessage.toLowerCase();
 
-                            if (userFriendlyMessage.includes('Prompt bloqueado') || userFriendlyMessage.toLowerCase().includes('conteúdo inseguro') || userFriendlyMessage.toLowerCase().includes('conteudo inseguro')) {
+                            // Detectar erro de cookies expirados/inválidos
+                            const isCookieError = errorLower.includes('cookie') || 
+                                                errorLower.includes('autenticar') || 
+                                                errorLower.includes('sessão') ||
+                                                errorLower.includes('session') ||
+                                                errorLower.includes('invalid cookie') ||
+                                                errorLower.includes('cookie inválido') ||
+                                                errorLower.includes('verifique os cookies') ||
+                                                errorLower.includes('refresh session') ||
+                                                errorLower.includes('expired');
+
+                            if (isCookieError) {
+                                alert('⚠️ COOKIES DO IMAGEFX EXPIRADOS!\n\nOs cookies do ImageFX expiraram ou são inválidos.\n\nPor favor:\n1. Abra o ImageFX no navegador e faça login\n2. Use a extensão "Cookie Editor" para exportar os cookies atualizados\n3. Vá em Configurações e cole os novos cookies\n4. Tente gerar as imagens novamente\n\nOs cookies precisam ser renovados periodicamente.');
+                                
+                                imageFxResults.images[currentImageIndex] = {
+                                    status: 'failed',
+                                    prompt: currentPrompt,
+                                    error: 'Cookies do ImageFX expirados. Renove os cookies nas Configurações.',
+                                    sceneNumber: currentSceneNumber,
+                                    aspectRatio: form.aspectRatio
+                                };
+                                renderImageFxOutput();
+                                completed++;
+                                updateProgress();
+                                return;
+                            }
+
+                            if (userFriendlyMessage.includes('Prompt bloqueado') || errorLower.includes('conteúdo inseguro') || errorLower.includes('conteudo inseguro')) {
                                 const success = await processFailedImageRetry({
                                     status: 'failed',
                                     prompt: currentPrompt,
@@ -4841,7 +5394,16 @@ ${scriptText}
                         updateProgress();
                     };
 
-                    await runTasksWithConcurrency(tasks, 3, processTask);
+                            await runTasksWithConcurrency(tasks, 3, processTask);
+                            
+                            // Se foi cancelado, parar aqui
+                            if (appState.imageGenStatus.cancelled) {
+                                appState.imageGenStatus.active = false;
+                                appState.imageGenStatus.message = 'Geração cancelada pelo usuário.';
+                                renderImageGenerationProgress(appState.imageGenStatus);
+                                addToLog('Geração de imagens cancelada pelo usuário.', false);
+                                return;
+                            }
 
                     // Retry automático para imagens com erro (com concorrência de 3 e loop até 100%)
                     if (!isRetry && !isBulkRetry) {
@@ -4850,8 +5412,17 @@ ${scriptText}
                         const maxAttempts = 50; // Limite de segurança para evitar loop infinito
                         
                         while (true) {
-                        const failedImages = imageFxResults.images.filter(img => img.status === 'failed');
-                        
+                            // Verificar se foi cancelado
+                            if (appState.imageGenStatus.cancelled) {
+                                appState.imageGenStatus.active = false;
+                                appState.imageGenStatus.message = 'Geração cancelada pelo usuário.';
+                                renderImageGenerationProgress(appState.imageGenStatus);
+                                addToLog('Geração de imagens cancelada pelo usuário.', false);
+                                break;
+                            }
+                            
+                            const failedImages = imageFxResults.images.filter(img => img.status === 'failed');
+                            
                             if (failedImages.length === 0) {
                                 addToLog(`Todas as imagens foram geradas com sucesso!`);
                                 break;
@@ -4878,6 +5449,11 @@ ${scriptText}
                             
                             // Processa com concorrência de 3 (em paralelo)
                             const processRetryTask = async (task) => {
+                                // Verificar se foi cancelado
+                                if (appState.imageGenStatus.cancelled) {
+                                    return;
+                                }
+                                
                                 const { img, index } = task;
                                 addToLog(`[Retry Paralelo] Iniciando retry para cena ${img.sceneNumber}...`);
                                 
@@ -5470,35 +6046,33 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             const scriptInput = document.getElementById('tts-script-input');
             const voiceSelect = document.getElementById('tts-voice-select');
             const modelSelect = document.getElementById('tts-model-select');
+            const providerSelect = document.getElementById('tts-provider-select');
             const styleInstructions = document.getElementById('tts-style-instructions');
             const outputContainer = document.getElementById('output');
 
             const script = scriptInput?.value.trim();
             const voice = voiceSelect?.value;
-            const ttsModel = modelSelect?.value;
+            const ttsModel = modelSelect?.value || 'gemini-2.5-pro-preview-tts'; // Fallback
+            const provider = providerSelect?.value || 'gemini';
             const style = styleInstructions?.value.trim();
 
-            if (!script || !voice || !ttsModel) {
-                showSuccessToast('Por favor, preencha o roteiro, selecione uma voz e um modelo de IA.');
+            if (!script || !voice) {
+                showSuccessToast('Por favor, preencha o roteiro e selecione uma voz.');
                 return;
             }
 
-            // Validação de limite de caracteres
-            const MAX_CHARS = 5000;
-            if (script.length > MAX_CHARS) {
-                showSuccessToast(`O roteiro excede o limite de ${MAX_CHARS} caracteres. Por favor, reduza o texto. (Atual: ${script.length} caracteres)`, true);
-                return;
-            }
+            // Sem limite de caracteres - o backend divide automaticamente em partes
 
             if (outputContainer) outputContainer.innerHTML = ''; // Clear previous results
 
             try {
-                addToLog('A iniciar geracao de narracao...');
+                addToLog(`A iniciar geracao de narracao usando ${provider === 'openai' ? 'OpenAI' : 'Gemini'}...`);
                 const response = await apiRequest('/api/tts/generate-from-script', 'POST', {
                     script: script,
                     voice: voice,
                     ttsModel: ttsModel,
-                    styleInstructions: style
+                    styleInstructions: style,
+                    provider: provider
                 });
 
                 if (!response.jobId) {
@@ -5566,7 +6140,8 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             const previewBtn = document.getElementById('tts-preview-btn');
             const previewPlayer = document.getElementById('tts-preview-player');
             const voice = document.getElementById('tts-voice-select').value;
-            const model = document.getElementById('tts-model-select').value;
+            const model = document.getElementById('tts-model-select')?.value || 'gemini-2.5-pro-preview-tts';
+            const provider = document.getElementById('tts-provider-select')?.value || 'gemini';
 
             if (!voice) {
                 showSuccessToast('Por favor, selecione uma voz para testar.');
@@ -5577,10 +6152,10 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                 previewBtn.disabled = true;
                 previewBtn.classList.add('opacity-50');
             }
-            addToLog('A gerar previa da voz...');
+            addToLog(`A gerar previa da voz usando ${provider === 'openai' ? 'OpenAI' : 'Gemini'}...`);
 
             try {
-                const response = await apiRequest('/api/tts/preview', 'POST', { voice, model });
+                const response = await apiRequest('/api/tts/preview', 'POST', { voice, model, provider });
                 if (response.audio && response.audio.base64) {
                     if (previewPlayer) {
                         previewPlayer.src = `data:${response.audio.mimeType};base64,${response.audio.base64}`;
@@ -6220,28 +6795,16 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
                 const charCountEl = document.getElementById('tts-char-count');
                 if (scriptInput && scriptResults.fullResult && scriptResults.fullResult.full_script_text) {
                     const fullScript = scriptResults.fullResult.full_script_text;
-                    const MAX_CHARS = 5000;
                     
-                    // Limita a 5000 caracteres
-                    if (fullScript.length > MAX_CHARS) {
-                        scriptInput.value = fullScript.substring(0, MAX_CHARS);
-                        showSuccessToast(`Roteiro importado, mas foi limitado a ${MAX_CHARS} caracteres. O roteiro original tem ${fullScript.length} caracteres.`, true);
-                    } else {
-                        scriptInput.value = fullScript;
-                        showSuccessToast("Ultimo roteiro gerado foi importado.");
-                    }
+                    // Importa o roteiro completo sem limitação
+                    scriptInput.value = fullScript;
+                    showSuccessToast(`Ultimo roteiro gerado foi importado (${fullScript.length.toLocaleString('pt-BR')} caracteres).`);
                     
                     // Atualiza contador de caracteres
                     if (charCountEl) {
                         const currentLength = scriptInput.value.length;
-                        charCountEl.textContent = `${currentLength}/${MAX_CHARS} caracteres`;
-                        if (currentLength > MAX_CHARS * 0.9) {
-                            charCountEl.className = 'text-sm text-orange-600 dark:text-orange-400 font-medium';
-                        } else if (currentLength >= MAX_CHARS) {
-                            charCountEl.className = 'text-sm text-red-600 dark:text-red-400 font-medium';
-                        } else {
-                            charCountEl.className = 'text-sm text-gray-500 dark:text-gray-400';
-                        }
+                        charCountEl.textContent = `${currentLength.toLocaleString('pt-BR')} caracteres`;
+                        charCountEl.className = 'text-sm text-gray-500 dark:text-gray-400';
                     }
                     
                     updateVoiceDurationHint();
