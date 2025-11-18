@@ -39,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Modelo recomendado padrão (mais estável e confiável)
-    const RECOMMENDED_MODEL = 'gpt-5.1';
+    const RECOMMENDED_MODEL = 'gpt-4o';
     
     // Função helper para fazer requisição com fallback automático para modelo recomendado
     const apiRequestWithFallback = async (url, method, data, retries = 1) => {
@@ -6783,13 +6783,13 @@ Views: ${videoDetails.viewCount} | Likes: ${videoDetails.likeCount} | Comentario
             </optgroup>
         `;
 
-        // Modelo recomendado: GPT-5.1 (mais avançado e inteligente)
-        const RECOMMENDED_MODEL = 'gpt-5.1';
+        // Modelo recomendado: GPT-4o (mais estável e disponível na API)
+        const RECOMMENDED_MODEL = 'gpt-4o';
 
         const gptModelOptions = `
             <optgroup label="OpenAI GPT (Recomendado)">
-                <option value="gpt-5.1" selected>🚀 GPT-5.1 (Novo - Mais Inteligente)</option>
-                <option value="gpt-4o">⭐ GPT-4o (Recomendado)</option>
+                <option value="gpt-4o" selected>⭐ GPT-4o (Recomendado)</option>
+                <option value="gpt-5.1">🚀 GPT-5.1 (Em breve na API)</option>
                 <option value="gpt-4-turbo">GPT-4 Turbo</option>
                 <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
             </optgroup>
