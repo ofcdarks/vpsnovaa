@@ -4383,7 +4383,13 @@ ${removeAccents(suggestionsText)}
 ROTEIRO ORIGINAL (${originalWords} palavras, ~${originalDuration}min):
 """${removeAccents(reviewerResults.originalScript)}"""
 
-LEMBRE-SE: O roteiro revisado NUNCA pode ser menor que ${originalWords} palavras. Se estiver ficando curto, ADICIONE mais detalhes, exemplos e contexto relevante ao tema!`;
+LEMBRE-SE CRITICO: 
+- O roteiro revisado NUNCA pode ser menor que ${originalWords} palavras
+- O roteiro revisado NUNCA pode ser maior que ${Math.ceil(originalWords * 1.05)} palavras
+- Se estiver ficando curto, ADICIONE mais detalhes, exemplos e contexto relevante ao tema
+- Se estiver ficando longo, REMOVA detalhes desnecessários ou seja mais conciso
+- O tamanho FINAL deve estar ENTRE ${Math.ceil(originalWords * 1.01)} e ${Math.ceil(originalWords * 1.05)} palavras
+- CONTROLE O TAMANHO: Conte mentalmente as palavras enquanto escreve para não ultrapassar o limite!`;
                 
                 // Calcular maxOutputTokens dinamicamente
                 const estimatedInputTokens = Math.ceil((prompt.length / 4) * 1.2);
@@ -4701,8 +4707,11 @@ LEMBRE-SE: O roteiro revisado NUNCA pode ser menor que ${originalWords} palavras
                 const minAcceptableWords = Math.ceil(originalWords * 1.01); // Mínimo +1%
                 const maxAcceptableWords = Math.ceil(originalWords * 1.05); // Máximo +5%
                 
-                // Se ultrapassou 5%, AJUSTAR FORÇADAMENTE para garantir que NUNCA ultrapasse 5%
-                if (revisedWords > maxAcceptableWords) {
+                // PRIMEIRO: Se já está dentro do range (mesmo que abaixo do mínimo), NÃO expandir se estiver muito próximo do máximo
+                if (revisedWords >= minAcceptableWords && revisedWords <= maxAcceptableWords) {
+                    console.log(`✅ Roteiro dentro do range permitido: ${revisedWords} palavras (${((revisedWords - originalWords) / originalWords * 100).toFixed(1)}%)`);
+                    // Não fazer nada, está perfeito
+                } else if (revisedWords > maxAcceptableWords) {
                     console.error(`❌ CRÍTICO: Roteiro ultrapassou 5% (${revisedWords} palavras, máximo: ${maxAcceptableWords}). Ajustando FORÇADAMENTE mantendo o FINAL COMPLETO...`);
                     const wordsToRemove = revisedWords - maxAcceptableWords;
                     const totalParts = reviewerResults.revisedScriptParts.length;
@@ -4814,41 +4823,62 @@ LEMBRE-SE: O roteiro revisado NUNCA pode ser menor que ${originalWords} palavras
                 const finalRevisedText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
                 const finalRevisedWords = finalRevisedText.split(/\s+/).filter(Boolean).length;
                 
+                // Só expandir se realmente necessário E se não ultrapassar o máximo
                 if (finalRevisedWords < minAcceptableWords && reviewerResults.revisedScriptParts.length > 0) {
-                    console.error(`❌ CRÍTICO: Roteiro revisado muito curto! ${finalRevisedWords} < ${minAcceptableWords} palavras`);
-                    addToLog(`⚠️ ATENÇÃO CRÍTICA: Roteiro revisado tem apenas ${finalRevisedWords} palavras, menor que o mínimo (${minAcceptableWords}). Sistema vai expandir automaticamente para garantir qualidade...`, true);
-                    if (appState.reviewerProgress) {
-                        appState.reviewerProgress.message = "📈 Expandindo roteiro...";
-                        appState.reviewerProgress.subMessage = `Roteiro está ${minAcceptableWords - finalRevisedWords} palavras abaixo do mínimo. Expandindo...`;
-                        renderReviewerProgress(appState.reviewerProgress);
-                    }
-                    
-                    // Expansão SEQUENCIAL: adicionar conteúdo adicional nas partes existentes, uma por vez
-                    // LIMITAR a expansão para não ultrapassar 5%
                     const maxAllowedWords = Math.ceil(originalWords * 1.05);
-                    const wordsNeeded = Math.min(
-                        maxAllowedWords - finalRevisedWords, // Não ultrapassar 5%
-                        Math.ceil((minAcceptableWords - finalRevisedWords) * 1.1) // 10% de margem sobre o mínimo
-                    );
-                    const wordsPerPartToAdd = Math.max(20, Math.ceil(wordsNeeded / reviewerResults.revisedScriptParts.length));
                     
-                    console.log(`📈 Expandindo ${reviewerResults.revisedScriptParts.length} partes. Adicionar ~${wordsPerPartToAdd} palavras por parte.`);
-                    
-                    for (let i = 0; i < reviewerResults.revisedScriptParts.length; i++) {
-                        showProgressModal("Expandindo roteiro...", `Expandindo parte ${i + 1} de ${reviewerResults.revisedScriptParts.length}...`);
+                    // Verificar se vale a pena expandir (não expandir se já estiver muito próximo do máximo)
+                    if (finalRevisedWords >= maxAllowedWords * 0.95) {
+                        console.warn(`⚠️ Roteiro já está muito próximo do máximo (${finalRevisedWords}/${maxAllowedWords}). Não expandindo para evitar ultrapassar 5%.`);
+                        addToLog(`⚠️ Roteiro tem ${finalRevisedWords} palavras. Não será expandido para evitar ultrapassar o limite de 5%.`, true);
+                    } else {
+                        console.error(`❌ CRÍTICO: Roteiro revisado muito curto! ${finalRevisedWords} < ${minAcceptableWords} palavras`);
+                        addToLog(`⚠️ ATENÇÃO CRÍTICA: Roteiro revisado tem apenas ${finalRevisedWords} palavras, menor que o mínimo (${minAcceptableWords}). Sistema vai expandir automaticamente...`, true);
+                        if (appState.reviewerProgress) {
+                            appState.reviewerProgress.message = "📈 Expandindo roteiro...";
+                            appState.reviewerProgress.subMessage = `Roteiro está ${minAcceptableWords - finalRevisedWords} palavras abaixo do mínimo. Expandindo...`;
+                            renderReviewerProgress(appState.reviewerProgress);
+                        }
                         
-                        const part = reviewerResults.revisedScriptParts[i];
-                        const currentWords = part.part_content.split(/\s+/).filter(Boolean).length;
-                        // Garantir que não ultrapasse o máximo permitido por parte
-                        const maxWordsForPart = Math.ceil((originalWords / reviewerResults.revisedScriptParts.length) * 1.05);
-                        const targetWordsForPart = Math.min(currentWords + wordsPerPartToAdd, maxWordsForPart);
+                        // Expansão SEQUENCIAL: adicionar conteúdo adicional nas partes existentes, uma por vez
+                        // LIMITAR a expansão para não ultrapassar 5%
+                        const wordsNeeded = Math.min(
+                            maxAllowedWords - finalRevisedWords, // Não ultrapassar 5%
+                            Math.ceil((minAcceptableWords - finalRevisedWords) * 1.05) // 5% de margem sobre o mínimo
+                        );
                         
-                        const expansionPrompt = `Expanda o texto abaixo adicionando mais detalhes, exemplos, explicações e contexto RELEVANTES ao tema. 
-                        
+                        // Só expandir se realmente precisar e se não ultrapassar o limite
+                        if (wordsNeeded > 0 && finalRevisedWords + wordsNeeded <= maxAllowedWords) {
+                            const wordsPerPartToAdd = Math.max(10, Math.ceil(wordsNeeded / reviewerResults.revisedScriptParts.length));
+                            
+                            console.log(`📈 Expandindo ${reviewerResults.revisedScriptParts.length} partes. Adicionar ~${wordsPerPartToAdd} palavras por parte (máximo total: ${maxAllowedWords} palavras).`);
+                            
+                            for (let i = 0; i < reviewerResults.revisedScriptParts.length; i++) {
+                                if (appState.reviewerProgress) {
+                                    appState.reviewerProgress.subMessage = `Expandindo parte ${i + 1} de ${reviewerResults.revisedScriptParts.length}...`;
+                                    renderReviewerProgress(appState.reviewerProgress);
+                                }
+                                
+                                const part = reviewerResults.revisedScriptParts[i];
+                                const currentWords = part.part_content.split(/\s+/).filter(Boolean).length;
+                                
+                                // Calcular máximo permitido para esta parte
+                                const maxWordsForPart = Math.ceil((originalWords / reviewerResults.revisedScriptParts.length) * 1.05);
+                                const targetWordsForPart = Math.min(currentWords + wordsPerPartToAdd, maxWordsForPart);
+                                
+                                // Verificar se ainda precisa expandir esta parte
+                                if (targetWordsForPart <= currentWords) {
+                                    console.log(`⏭️ Parte ${i + 1} já tem tamanho adequado (${currentWords} palavras). Pulando...`);
+                                    continue;
+                                }
+                                
+                                const expansionPrompt = `Expanda o texto abaixo adicionando mais detalhes, exemplos, explicações e contexto RELEVANTES ao tema. 
+                                
 INSTRUÇÕES CRÍTICAS:
 - Mantenha TODAS as informações originais (não remova nada)
 - Apenas ADICIONE conteúdo novo e relevante
-- O texto expandido deve ter aproximadamente ${targetWordsForPart} palavras (atualmente: ${currentWords} palavras)
+- O texto expandido deve ter EXATAMENTE ${targetWordsForPart} palavras (atualmente: ${currentWords} palavras)
+- NÃO ultrapasse ${targetWordsForPart} palavras - seja preciso!
 - Mantenha o mesmo tom, estilo e linguagem
 - NÃO adicione títulos, marcadores ou tags
 - Apenas narração pura para voice-over
@@ -4857,39 +4887,53 @@ INSTRUÇÕES CRÍTICAS:
 TEXTO ATUAL (${currentWords} palavras):
 """${removeAccents(part.part_content)}"""
 
-Texto expandido (alvo: ${targetWordsForPart} palavras):`;
-                        
-                        try {
-                            const expansionResult = await apiRequestWithFallback('/api/generate-legacy', 'POST', {
-                                prompt: expansionPrompt,
-                                model,
-                                maxOutputTokens: Math.ceil(targetWordsForPart / 0.75 * 1.3),
-                                temperature: 0.7
-                            });
-                            
-                            if (expansionResult && expansionResult.data) {
-                                let expandedText = expansionResult.data.text || expansionResult.data || '';
-                                if (typeof expandedText === 'object' && expandedText.text) {
-                                    expandedText = expandedText.text;
+Texto expandido (alvo EXATO: ${targetWordsForPart} palavras):`;
+                                
+                                try {
+                                    const expansionResult = await apiRequestWithFallback('/api/generate-legacy', 'POST', {
+                                        prompt: expansionPrompt,
+                                        model,
+                                        maxOutputTokens: Math.ceil(targetWordsForPart / 0.75 * 1.2), // Reduzir margem
+                                        temperature: 0.7
+                                    });
+                                    
+                                    if (expansionResult && expansionResult.data) {
+                                        let expandedText = expansionResult.data.text || expansionResult.data || '';
+                                        if (typeof expandedText === 'object' && expandedText.text) {
+                                            expandedText = expandedText.text;
+                                        }
+                                        expandedText = expandedText.replace(/^```[\w]*\n?|\n?```$/gm, '').trim();
+                                        
+                                        const expandedWords = expandedText.split(/\s+/).filter(Boolean).length;
+                                        
+                                        // Validar se não ultrapassou o máximo permitido
+                                        if (expandedWords <= maxWordsForPart && expandedWords > currentWords) {
+                                            reviewerResults.revisedScriptParts[i].part_content = expandedText;
+                                            console.log(`✅ Parte ${i + 1} expandida: ${currentWords} → ${expandedWords} palavras`);
+                                        } else if (expandedWords > maxWordsForPart) {
+                                            // Truncar se ultrapassou
+                                            const wordsArray = expandedText.split(/\s+/);
+                                            reviewerResults.revisedScriptParts[i].part_content = wordsArray.slice(0, maxWordsForPart).join(' ');
+                                            console.warn(`⚠️ Parte ${i + 1} ultrapassou máximo. Truncada para ${maxWordsForPart} palavras.`);
+                                        } else {
+                                            console.warn(`⚠️ Parte ${i + 1}: Expansão não aumentou palavras (${currentWords} → ${expandedWords})`);
+                                        }
+                                    }
+                                } catch (error) {
+                                    console.error(`❌ Erro ao expandir parte ${i + 1}:`, error);
+                                    addToLog(`Erro ao expandir parte ${i + 1}: ${error.message}. Continuando com o texto atual...`, true);
+                                    // Continuar mesmo com erro - não bloquear o processo
                                 }
-                                expandedText = expandedText.replace(/^```[\w]*\n?|\n?```$/gm, '').trim();
                                 
-                                const expandedWords = expandedText.split(/\s+/).filter(Boolean).length;
-                                
-                                console.log(`✅ Parte ${i + 1}: ${currentWords} → ${expandedWords} palavras`);
-                                
-                                if (expandedWords > currentWords) {
-                                    reviewerResults.revisedScriptParts[i].part_content = expandedText;
-                                    console.log(`✅ Parte ${i + 1} expandida: ${currentWords} → ${expandedWords} palavras`);
-                                    // NÃO renderizar aqui - deixar para o final (evita piscar do modal)
-                                    // renderReviewerScriptPage();
-                                } else {
-                                    console.warn(`⚠️ Parte ${i + 1}: Expansão não aumentou palavras (${currentWords} → ${expandedWords})`);
+                                // Verificar se já atingiu o máximo total
+                                const currentTotal = reviewerResults.revisedScriptParts.map(p => p.part_content.split(/\s+/).filter(Boolean).length).reduce((a, b) => a + b, 0);
+                                if (currentTotal >= maxAllowedWords) {
+                                    console.log(`✅ Limite máximo atingido (${currentTotal} palavras). Parando expansão.`);
+                                    break;
                                 }
                             }
-                        } catch (error) {
-                            console.error(`❌ Erro ao expandir parte ${i + 1}:`, error);
-                            addToLog(`Erro ao expandir parte ${i + 1}: ${error.message}`, true);
+                        } else {
+                            console.warn(`⚠️ Não é possível expandir sem ultrapassar o limite de 5%. Mantendo roteiro atual (${finalRevisedWords} palavras).`);
                         }
                     }
                     
@@ -4897,9 +4941,9 @@ Texto expandido (alvo: ${targetWordsForPart} palavras):`;
                     fullRevisedText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
                     revisedWords = fullRevisedText.split(/\s+/).filter(Boolean).length;
                     
-                    // Verificar se ultrapassou 5% após expansão e ajustar mantendo final completo
+                    // VALIDAÇÃO FINAL CRÍTICA: Se ainda ultrapassou 5% após expansão, truncar FORÇADAMENTE
                     if (revisedWords > maxAcceptableWords) {
-                        console.warn(`⚠️ Após expansão, roteiro ultrapassou 5% (${revisedWords} palavras). Ajustando mantendo FINAL COMPLETO...`);
+                        console.error(`❌ CRÍTICO: Após expansão, roteiro AINDA ultrapassou 5% (${revisedWords} palavras, máximo: ${maxAcceptableWords}). Aplicando truncamento final agressivo...`);
                         const wordsToRemove = revisedWords - maxAcceptableWords;
                         const totalParts = reviewerResults.revisedScriptParts.length;
                         
@@ -4949,7 +4993,31 @@ Texto expandido (alvo: ${targetWordsForPart} palavras):`;
                         
                         fullRevisedText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
                         revisedWords = fullRevisedText.split(/\s+/).filter(Boolean).length;
-                        console.log(`✅ Roteiro ajustado após expansão: ${revisedWords} palavras - FINAL MANTIDO COMPLETO`);
+                        
+                        // Se ainda ultrapassou após ajuste, aplicar truncamento final absoluto
+                        if (revisedWords > maxAcceptableWords) {
+                            console.error(`❌ Aplicando truncamento final absoluto: ${revisedWords} → ${maxAcceptableWords} palavras`);
+                            const wordsArray = fullRevisedText.split(/\s+/);
+                            const truncatedText = wordsArray.slice(0, maxAcceptableWords).join(' ');
+                            const truncatedWords = truncatedText.split(/\s+/);
+                            const wordsPerPartFinal = Math.ceil(truncatedWords.length / totalParts);
+                            
+                            reviewerResults.revisedScriptParts = [];
+                            for (let i = 0; i < totalParts; i++) {
+                                const start = i * wordsPerPartFinal;
+                                const end = Math.min(start + wordsPerPartFinal, truncatedWords.length);
+                                if (start < truncatedWords.length) {
+                                    reviewerResults.revisedScriptParts.push({
+                                        part_title: `Parte ${i + 1}`,
+                                        part_content: truncatedWords.slice(start, end).join(' ')
+                                    });
+                                }
+                            }
+                            fullRevisedText = reviewerResults.revisedScriptParts.map(p => p.part_content).join('\n\n');
+                            revisedWords = fullRevisedText.split(/\s+/).filter(Boolean).length;
+                        }
+                        
+                        console.log(`✅ Roteiro ajustado após expansão: ${revisedWords} palavras (${((revisedWords - originalWords) / originalWords * 100).toFixed(1)}%) - FINAL MANTIDO COMPLETO`);
                     }
                     
                     if (revisedWords >= minAcceptableWords && revisedWords <= maxAcceptableWords) {
