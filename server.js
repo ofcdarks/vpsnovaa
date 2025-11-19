@@ -21,7 +21,7 @@ const FormData = require('form-data');
 // const multer = require('multer');
 const helmet = require('helmet');
 // Importar limites de tokens baseados na documentação oficial
-const { getTokenLimits, estimateTokens, canFitInLimits } = require('./token-limits');
+const { getTokenLimits, estimateTokens, canFitInLimits, normalizeModelName } = require('./token-limits');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
@@ -1818,40 +1818,15 @@ const splitPromptIntoParts = (prompt, model, maxOutputTokens) => {
 };
 
 // ==========================
-// LIMITES REAIS DOS MODELOS
-// ==========================
-const MODEL_LIMITS = {
-  // Google Gemini
-  "gemini-2.5-flash-lite": { context: 1_000_000, output: 8192 },
-  "gemini-2.5-flash": { context: 1_000_000, output: 16384 },
-  "gemini-2.5-pro": { context: 2_000_000, output: 32768 },
-  
-  // OpenAI
-  "gpt-4o": { context: 128_000, output: 16384 },
-  "gpt-4-turbo": { context: 128_000, output: 16384 },
-  "gpt-3.5-turbo": { context: 16385, output: 4096 },
-  
-  // Anthropic Claude
-  "claude-3-5-sonnet": { context: 200_000, output: 8192 },
-  "claude-sonnet-4": { context: 200_000, output: 8192 },
-  "claude-sonnet-4.5": { context: 200_000, output: 8192 },
-  "claude-3.5-haiku": { context: 200_000, output: 4096 }
-};
-
-// ==========================
 // ANÁLISE INTELIGENTE DO ROTEIRO
 // ==========================
 function analiseDeRoteiro(roteiro, modelo, tokensPorCena = 300) {
   const palavras = roteiro.trim().split(/\s+/).filter(Boolean).length;
   const tokensScript = Math.round(palavras * 1.9);
-  const limit = MODEL_LIMITS[modelo];
+  const limits = getTokenLimits(modelo);
   
-  if (!limit) {
-    throw new Error(`Modelo "${modelo}" não encontrado em MODEL_LIMITS.`);
-  }
-  
-  const tokensDisponiveis = limit.context - tokensScript;
-  const cenasMaxSaida = Math.floor(limit.output / tokensPorCena);
+  const tokensDisponiveis = Math.max(limits.maxContextLength - tokensScript, 0);
+  const cenasMaxSaida = Math.max(1, Math.floor(limits.maxOutputTokens / tokensPorCena));
   
   console.log("📊 Análise do roteiro:");
   console.log("   Palavras:", palavras);
@@ -1870,15 +1845,11 @@ function analiseDeRoteiro(roteiro, modelo, tokensPorCena = 300) {
 // ==========================
 // CÁLCULO DO maxOutputTokens SEM DESPERDÍCIO
 // ==========================
-const normalizeModelKey = (modelo = '') => modelo.toLowerCase().trim();
+const normalizeModelKey = (modelo = '') => normalizeModelName(modelo || '');
 
 function calcularMaxOutputTokens(modelo, cenasFinal, tokensPorCena = 300) {
   const modelKey = normalizeModelKey(modelo);
-  const limit = MODEL_LIMITS[modelKey];
-  
-  if (!limit) {
-    throw new Error(`Modelo "${modelo}" não encontrado em MODEL_LIMITS.`);
-  }
+  const limits = getTokenLimits(modelo);
   
   const tokensEstimados = cenasFinal * tokensPorCena;
   
@@ -1887,7 +1858,7 @@ function calcularMaxOutputTokens(modelo, cenasFinal, tokensPorCena = 300) {
   let maxTokensSaida = Math.ceil(tokensEstimados * factor);
   
   // não deixar exceder limite real do modelo
-  maxTokensSaida = Math.min(maxTokensSaida, limit.output);
+  maxTokensSaida = Math.min(maxTokensSaida, limits.maxOutputTokens);
   
   // não deixar muito baixo para evitar cortes
   if (maxTokensSaida < tokensPorCena * 2) {
@@ -1895,7 +1866,7 @@ function calcularMaxOutputTokens(modelo, cenasFinal, tokensPorCena = 300) {
   }
   
   console.log(`   🔧 Cálculo de tokens: ${cenasFinal} cenas × ${tokensPorCena} = ${tokensEstimados} tokens estimados`);
-  console.log(`   🔧 Fator de segurança: ${factor} → ${maxTokensSaida} tokens (limite do modelo: ${limit.output})`);
+  console.log(`   🔧 Fator de segurança: ${factor} → ${maxTokensSaida} tokens (limite do modelo: ${limits.maxOutputTokens})`);
   
   return maxTokensSaida;
 }
@@ -2258,9 +2229,9 @@ app.post('/api/generate', verifyToken, async (req, res) => {
         continue;
       }
 
-      let maxOutputTokens;
-      try {
-        maxOutputTokens = calcularMaxOutputTokens(modelKey, total, tokensPorCena);
+        let maxOutputTokens;
+        try {
+          maxOutputTokens = calcularMaxOutputTokens(modelName, total, tokensPorCena);
       } catch (calcErr) {
         console.log(`⚠️ Não foi possível calcular tokens para ${modelName}: ${calcErr.message}`);
         continue;

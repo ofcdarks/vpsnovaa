@@ -77,16 +77,37 @@ const TOKEN_LIMITS = {
     }
 };
 
+const MODEL_ALIAS_RULES = [
+    { test: /^claude-sonnet-4-5/, canonical: 'claude-sonnet-4.5' },
+    { test: /^gpt-4o-mini/, canonical: 'gpt-4o' },
+    { test: /^gemini-2\.0-flash-exp/, canonical: 'gemini-2.5-flash' }
+];
+
 /**
  * Normaliza o nome de um modelo para facilitar matching.
  * Ex: "Claude-4-5-Haiku-20251001" → "claude-4-5-haiku"
  */
 function normalizeModelName(model) {
-    return model
+    if (!model) return '';
+
+    let normalized = model
         .toLowerCase()
         .replace(/_/g, '-')
         .replace(/\s+/g, '')
         .trim();
+
+    // Remover sufixos de data das APIs (ex.: -20250929)
+    normalized = normalized.replace(/-20\d{6,8}$/, '');
+
+    // Aplicar regras de alias conhecidas
+    for (const rule of MODEL_ALIAS_RULES) {
+        if (rule.test.test(normalized)) {
+            normalized = rule.canonical;
+            break;
+        }
+    }
+
+    return normalized;
 }
 
 /**
@@ -178,5 +199,6 @@ module.exports = {
     TOKEN_LIMITS,
     getTokenLimits,
     estimateTokens,
-    canFitInLimits
+    canFitInLimits,
+    normalizeModelName
 };

@@ -39,8 +39,29 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('📋 [TOKEN_LIMITS_FRONTEND] Carregado. gemini-2.5-pro:', TOKEN_LIMITS_FRONTEND['gemini-2.5-pro']);
 
     // Normaliza o nome de um modelo para facilitar matching
-    const normalizeModelName = (model) => {
-        return model.toLowerCase().replace(/_/g, '-').replace(/\s+/g, '').trim();
+    const MODEL_ALIAS_RULES = [
+        { test: /^claude-sonnet-4-5/, canonical: 'claude-sonnet-4.5' },
+        { test: /^gpt-4o-mini/, canonical: 'gpt-4o' },
+        { test: /^gemini-2\.0-flash-exp/, canonical: 'gemini-2.5-flash' }
+    ];
+
+    const normalizeModelName = (model = '') => {
+        let normalized = model
+            .toLowerCase()
+            .replace(/_/g, '-')
+            .replace(/\s+/g, '')
+            .trim();
+
+        normalized = normalized.replace(/-20\d{6,8}$/, '');
+
+        for (const rule of MODEL_ALIAS_RULES) {
+            if (rule.test.test(normalized)) {
+                normalized = rule.canonical;
+                break;
+            }
+        }
+
+        return normalized;
     };
 
     // Modelo recomendado padrão (mais estável e confiável)
