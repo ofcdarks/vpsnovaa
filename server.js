@@ -760,8 +760,27 @@ const buildTtsPrompt = (styleInstructions = '', segments = [], skipSpeakerPrefix
 const checkFfmpegAvailable = async () => {
     try {
         const { execSync } = require('child_process');
-        execSync(`${ffmpegPath} -version`, { stdio: 'ignore', timeout: 5000 });
-        return true;
+        // Tenta usar o caminho do @ffmpeg-installer primeiro
+        if (ffmpegPath && ffmpegPath !== '') {
+            try {
+                execSync(`"${ffmpegPath}" -version`, { stdio: 'ignore', timeout: 5000 });
+                console.log(`✅ FFmpeg disponível em: ${ffmpegPath}`);
+                return true;
+            } catch (err) {
+                console.warn(`⚠️ FFmpeg do @ffmpeg-installer falhou: ${err.message}`);
+            }
+        }
+        
+        // Fallback: tenta usar ffmpeg do sistema
+        try {
+            execSync('ffmpeg -version', { stdio: 'ignore', timeout: 5000 });
+            console.log('✅ FFmpeg disponível no sistema (PATH)');
+            return true;
+        } catch (err) {
+            console.warn('⚠️ FFmpeg não encontrado no sistema');
+        }
+        
+        return false;
     } catch (error) {
         console.warn('⚠️ FFmpeg não disponível ou com erro. Usando áudio direto da API.');
         return false;
@@ -1140,6 +1159,20 @@ async function processLongTtsJob(jobId, jobData) {
             throw new Error('FFmpeg não está disponível na VPS. FFmpeg é necessário para juntar os arquivos de áudio. Por favor, instale o FFmpeg no servidor.');
         }
         
+        console.log(`🔧 Preparando para juntar ${tempFilePaths.length} arquivos de áudio...`);
+        console.log(`🔧 FFmpeg Path: ${ffmpegPath}`);
+        
+        // Verificar se todos os arquivos existem antes de tentar juntar
+        for (const filePath of tempFilePaths) {
+            try {
+                const stats = await fs.stat(filePath);
+                console.log(`   ✅ Arquivo encontrado: ${filePath} (${stats.size} bytes)`);
+            } catch (err) {
+                console.error(`   ❌ Arquivo não encontrado: ${filePath}`);
+                throw new Error(`Arquivo de áudio não encontrado: ${filePath}`);
+            }
+        }
+        
         await new Promise((resolve, reject) => {
             const command = ffmpeg();
             tempFilePaths.forEach(filePath => command.input(filePath));
@@ -1154,11 +1187,16 @@ async function processLongTtsJob(jobId, jobData) {
                     '-fflags', '+genpts', // Gera timestamps para melhor sincronização
                     '-avoid_negative_ts', 'make_zero' // Evita problemas de timestamps negativos
                 ])
-                .on('error', (err) => {
+                .on('start', (commandLine) => {
+                    console.log(`🚀 Iniciando FFMPEG com comando: ${commandLine}`);
+                })
+                .on('error', (err, stdout, stderr) => {
                     console.error(`❌ Erro crítico no FFMPEG ao juntar áudios: ${err.message}`);
-                    console.error(`   FFmpeg é necessário para juntar os arquivos de áudio.`);
+                    console.error(`   Stdout: ${stdout || 'N/A'}`);
+                    console.error(`   Stderr: ${stderr || 'N/A'}`);
+                    console.error(`   FFmpeg Path: ${ffmpegPath}`);
                     console.error(`   Verifique se o FFmpeg está instalado corretamente na VPS.`);
-                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. FFmpeg é necessário para esta operação.`));
+                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. Verifique os logs do servidor para mais detalhes.`));
                 })
                 .on('end', () => {
                     console.log(`✅ Áudios juntados com sucesso: ${tempFilePaths.length} partes combinadas em ${finalFilePath}`);
@@ -1717,306 +1755,967 @@ const rewriteImagePromptWithAi = async ({ userSettings, failedPrompt, context, m
   throw lastError || new Error('Falha ao reescrever o prompt.');
 };
 
-app.post('/api/generate', verifyToken, async (req, res) => {
-  const { prompt, schema, model, stream, maxOutputTokens, temperature } = req.body;
-  if (!prompt || !model) return res.status(400).json({ message: "O prompt e o modelo são obrigatórios." });
+// ================================================
+// 🔧 FUNÇÃO PARA DIVIDIR PROMPTS LONGOS EM PARTES
+// ================================================
+const splitPromptIntoParts = (prompt, model, maxOutputTokens) => {
+    const tokenLimits = getTokenLimits(model);
+    const promptTokens = estimateTokens(prompt);
+    const outputTokens = maxOutputTokens || tokenLimits.maxOutputTokens;
+    
+    // Verificar se o prompt cabe com a saída solicitada
+    const totalNeeded = promptTokens + outputTokens;
+    
+    // Se cabe, não precisa dividir
+    if (totalNeeded <= tokenLimits.maxContextLength) {
+        console.log(`✅ Prompt cabe no limite: ${promptTokens} tokens (input) + ${outputTokens} tokens (output) = ${totalNeeded}/${tokenLimits.maxContextLength} tokens`);
+        return { needsSplit: false, parts: [prompt] };
+    }
+    
+    // Calcular quantas partes são necessárias
+    // Deixar margem de segurança de 20% para instruções de continuação
+    const safeContextLength = Math.floor(tokenLimits.maxContextLength * 0.7);
+    const tokensPerPart = safeContextLength - outputTokens;
+    const numParts = Math.ceil(promptTokens / tokensPerPart);
+    
+    console.log(`⚠️ Prompt muito longo! ${promptTokens} tokens precisa ser dividido em ~${numParts} partes`);
+    console.log(`   📊 Limite do modelo: ${tokenLimits.maxContextLength} tokens`);
+    console.log(`   📊 Tokens por parte: ~${tokensPerPart} tokens`);
+    
+    // Dividir o prompt em partes aproximadamente iguais
+    // Tenta dividir por parágrafos ou sentenças para manter contexto
+    const lines = prompt.split('\n');
+    const parts = [];
+    let currentPart = '';
+    let currentTokens = 0;
+    
+    for (const line of lines) {
+        const lineTokens = estimateTokens(line + '\n');
+        
+        if (currentTokens + lineTokens > tokensPerPart && currentPart) {
+            // Parte cheia, salvar e começar nova
+            parts.push(currentPart.trim());
+            currentPart = line + '\n';
+            currentTokens = lineTokens;
+        } else {
+            currentPart += line + '\n';
+            currentTokens += lineTokens;
+        }
+    }
+    
+    // Adicionar última parte
+    if (currentPart.trim()) {
+        parts.push(currentPart.trim());
+    }
+    
+    console.log(`✅ Prompt dividido em ${parts.length} partes reais`);
+    parts.forEach((part, i) => {
+        const tokens = estimateTokens(part);
+        console.log(`   📄 Parte ${i + 1}: ~${tokens} tokens`);
+    });
+    
+    return { needsSplit: true, parts, totalParts: parts.length };
+};
 
+// ==========================
+// LIMITES REAIS DOS MODELOS
+// ==========================
+const MODEL_LIMITS = {
+  // Google Gemini
+  "gemini-2.5-flash-lite": { context: 1_000_000, output: 8192 },
+  "gemini-2.5-flash": { context: 1_000_000, output: 16384 },
+  "gemini-2.5-pro": { context: 2_000_000, output: 32768 },
+  
+  // OpenAI
+  "gpt-4o": { context: 128_000, output: 16384 },
+  "gpt-4-turbo": { context: 128_000, output: 16384 },
+  "gpt-3.5-turbo": { context: 16385, output: 4096 },
+  
+  // Anthropic Claude
+  "claude-3-5-sonnet": { context: 200_000, output: 8192 },
+  "claude-sonnet-4": { context: 200_000, output: 8192 },
+  "claude-sonnet-4.5": { context: 200_000, output: 8192 },
+  "claude-3.5-haiku": { context: 200_000, output: 4096 }
+};
+
+// ==========================
+// ANÁLISE INTELIGENTE DO ROTEIRO
+// ==========================
+function analiseDeRoteiro(roteiro, modelo, tokensPorCena = 300) {
+  const palavras = roteiro.trim().split(/\s+/).filter(Boolean).length;
+  const tokensScript = Math.round(palavras * 1.9);
+  const limit = MODEL_LIMITS[modelo];
+  
+  if (!limit) {
+    throw new Error(`Modelo "${modelo}" não encontrado em MODEL_LIMITS.`);
+  }
+  
+  const tokensDisponiveis = limit.context - tokensScript;
+  const cenasMaxSaida = Math.floor(limit.output / tokensPorCena);
+  
+  console.log("📊 Análise do roteiro:");
+  console.log("   Palavras:", palavras);
+  console.log("   Tokens do script: ~", tokensScript);
+  console.log("   Tokens disponíveis para saída: ~", tokensDisponiveis);
+  console.log("   Cenas máximas por tokens:", cenasMaxSaida);
+  
+  return {
+    palavras,
+    tokensScript,
+    tokensDisponiveis,
+    cenasMaxSaida
+  };
+}
+
+// ==========================
+// CÁLCULO DO maxOutputTokens SEM DESPERDÍCIO
+// ==========================
+const normalizeModelKey = (modelo = '') => modelo.toLowerCase().trim();
+
+function calcularMaxOutputTokens(modelo, cenasFinal, tokensPorCena = 300) {
+  const modelKey = normalizeModelKey(modelo);
+  const limit = MODEL_LIMITS[modelKey];
+  
+  if (!limit) {
+    throw new Error(`Modelo "${modelo}" não encontrado em MODEL_LIMITS.`);
+  }
+  
+  const tokensEstimados = cenasFinal * tokensPorCena;
+  
+  // Fator de segurança inteligente: Gemini precisa de mais margem (1.6), outros modelos 1.3
+  const factor = modelKey.includes("gemini") ? 1.6 : 1.3;
+  let maxTokensSaida = Math.ceil(tokensEstimados * factor);
+  
+  // não deixar exceder limite real do modelo
+  maxTokensSaida = Math.min(maxTokensSaida, limit.output);
+  
+  // não deixar muito baixo para evitar cortes
+  if (maxTokensSaida < tokensPorCena * 2) {
+    maxTokensSaida = tokensPorCena * 2;
+  }
+  
+  console.log(`   🔧 Cálculo de tokens: ${cenasFinal} cenas × ${tokensPorCena} = ${tokensEstimados} tokens estimados`);
+  console.log(`   🔧 Fator de segurança: ${factor} → ${maxTokensSaida} tokens (limite do modelo: ${limit.output})`);
+  
+  return maxTokensSaida;
+}
+
+function contarCenasGeradas(texto = '') {
+  const matches = texto.match(/Cena\s+\d+:/gi);
+  return matches ? matches.length : 0;
+}
+
+function verificarIntegridade(texto = '', totalCenas) {
+  const geradas = contarCenasGeradas(texto);
+  if (geradas !== totalCenas) return false;
+
+  for (let i = 1; i <= totalCenas; i++) {
+    if (!texto.includes(`Cena ${i}:`)) return false;
+  }
+  return true;
+}
+
+function montarPromptDeCena(roteiro, totalCenas, palavrasPorCena) {
+  return `
+Você deve gerar EXATAMENTE ${totalCenas} cenas. 
+Violar isso é ERRO FATAL.
+
+REGRAS:
+- Gerar cenas numeradas de 1 até ${totalCenas}
+- Cada cena começa com: "Cena X:"
+- Não pular números
+- Não repetir cena
+- Não gerar cenas extras
+- Cada cena deve ter aproximadamente ${palavrasPorCena} palavras
+- Não explicar nada, apenas cenas
+- Não escrever texto fora das cenas
+
+FORMATO OBRIGATÓRIO:
+
+Cena 1:
+[descrição]
+
+Cena 2:
+[descrição]
+
+...
+
+Cena ${totalCenas}:
+[descrição]
+
+ROTEIRO BASE:
+${roteiro}
+
+Reveja sua resposta antes de enviar e garanta que há EXATAMENTE ${totalCenas} cenas.
+`.trim();
+}
+
+async function chamarGemini(modelo, prompt, maxOutputTokens, apiKey) {
+  if (!apiKey) throw new Error("Chave de API Gemini não configurada.");
+
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens }
+  };
+
+  const response = await callApiWithRetries(() =>
+    axios.post(apiUrl, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 300000
+    })
+  );
+
+  const candidate = response.data?.candidates?.[0];
+  if (!candidate) throw new Error("Resposta vazia do Gemini.");
+  if (candidate.finishReason === "MAX_TOKENS") throw new Error("MAX_TOKENS: Gemini cortou a resposta.");
+
+  const text = candidate.content?.parts?.[0]?.text;
+  if (!text || !text.trim()) throw new Error("Resposta vazia do Gemini.");
+  return text.trim();
+}
+
+async function chamarOpenAI(modelo, prompt, maxOutputTokens, apiKey) {
+  if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
+
+  const body = {
+    model: modelo,
+    max_tokens: maxOutputTokens,
+    messages: [{ role: "user", content: prompt }]
+  };
+
+  const response = await callApiWithRetries(() =>
+    axios.post('https://api.openai.com/v1/chat/completions', body, {
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      timeout: 300000
+    })
+  );
+
+  const text = response.data?.choices?.[0]?.message?.content;
+  if (!text || !text.trim()) throw new Error("Resposta vazia do GPT.");
+  return text.trim();
+}
+
+async function chamarClaude(modelo, prompt, maxOutputTokens, apiKey) {
+  if (!apiKey) throw new Error("Chave de API Claude não configurada.");
+
+  const body = {
+    model: modelo,
+    max_tokens: maxOutputTokens,
+    messages: [{ role: "user", content: prompt }]
+  };
+
+  const response = await callApiWithRetries(() =>
+    axios.post('https://api.anthropic.com/v1/messages', body, {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      timeout: 300000
+    })
+  );
+
+  const contentItem = response.data?.content?.[0];
+  const text = contentItem?.text || contentItem?.value;
+  if (!text || !text.trim()) throw new Error("Resposta vazia do Claude.");
+  return text.trim();
+}
+
+// ==========================
+// GERAR AS CENAS (função principal)
+// ==========================
+async function generateScenePrompts({
+  modelo,
+  roteiro,
+  totalCenas,
+  tokensPorCena = 300,
+  geminiKeys,
+  gptKey,
+  claudeKey,
+  schema
+}) {
+  // 1. Analisar roteiro
+  const analise = analiseDeRoteiro(roteiro, modelo, tokensPorCena);
+  
+  // limitar pelo modelo
+  const cenasFinal = Math.min(totalCenas, analise.cenasMaxSaida);
+  
+  console.log(`   🎬 Cenas solicitadas: ${totalCenas}`);
+  console.log(`   🎬 Cenas permitidas pelo modelo: ${analise.cenasMaxSaida}`);
+  console.log(`   🎬 Cenas finais a gerar: ${cenasFinal}`);
+  
+  // 2. Calcular saída ideal sem desperdício
+  const maxOutputTokens = calcularMaxOutputTokens(modelo, cenasFinal, tokensPorCena);
+  
+  console.log(`📊 Requisição completa: ${cenasFinal} cenas, usando ${maxOutputTokens} tokens de saída (dinâmico)`);
+  
+  // 3. Montar prompt (simplificado - você pode expandir depois)
+  const prompt = `Diretor de arte: Divida o roteiro em cenas visuais lógicas. Gere EXATAMENTE ${cenasFinal} cenas. Para cada cena, gere 1 prompt em INGLÊS otimizado para geração de imagens. Formato JSON array: [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}].
+
+ROTEIRO:
+"""${roteiro}"""`;
+  
+  // 4. Preparar config para API
+  const modelLower = modelo.toLowerCase().trim();
+  let provider;
+  
+  if (modelLower.startsWith('claude-')) {
+    provider = 'claude';
+  } else if (modelLower.startsWith('gpt-')) {
+    provider = 'gpt';
+  } else {
+    provider = 'gemini';
+  }
+  
+  // 5. CHAMAR A API
+  let response;
+  let finishReason;
+  let texto;
+  
+  if (provider === 'gemini') {
+    if (!geminiKeys || geminiKeys.length === 0) {
+      throw new Error("Nenhuma chave de API Gemini está configurada.");
+    }
+    const key = geminiKeys[0];
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${key}`;
+    const generationConfig = {
+      maxOutputTokens,
+      temperature: 0.95,
+      topP: 0.95
+    };
+    if (schema) {
+      generationConfig.response_mime_type = "application/json";
+    }
+    
+    response = await callApiWithRetries(() => axios.post(apiUrl, {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
+    
+    const candidate = response.data.candidates?.[0];
+    finishReason = candidate?.finishReason;
+    texto = candidate?.content?.parts?.[0]?.text || "";
+    
+  } else if (provider === 'gpt') {
+    if (!gptKey) {
+      throw new Error("A chave da API OpenAI (GPT) não está configurada.");
+    }
+    const body = {
+      model: modelo,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: maxOutputTokens,
+      temperature: 0.95
+    };
+    if (schema) {
+      body.response_format = { type: "json_object" };
+    }
+    
+    response = await callApiWithRetries(() => axios.post('https://api.openai.com/v1/chat/completions', body, {
+      headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
+      timeout: 300000
+    }));
+    
+    texto = response.data.choices[0].message.content;
+    finishReason = response.data.choices[0].finish_reason; // 'stop', 'length', etc.
+    
+  } else if (provider === 'claude') {
+    if (!claudeKey) {
+      throw new Error("A chave da API Claude não está configurada.");
+    }
+    const body = {
+      model: modelo,
+      max_tokens: maxOutputTokens,
+      temperature: 0.95,
+      messages: [{ role: "user", content: prompt }]
+    };
+    
+    response = await callApiWithRetries(() => axios.post('https://api.anthropic.com/v1/messages', body, {
+      headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      timeout: 300000
+    }));
+    
+    texto = response.data.content[0].text;
+    finishReason = response.data.stop_reason; // 'end_turn', 'max_tokens', etc.
+  }
+  
+  // Verificar corte real
+  if (finishReason === "MAX_TOKENS" || finishReason === "max_tokens" || finishReason === "length") {
+    throw new Error(`A IA cortou a resposta (atingiu ${maxOutputTokens} tokens).`);
+  }
+  
+  if (!texto || !texto.trim()) {
+    throw new Error("Resposta da IA vazia — algo está errado.");
+  }
+  
+  return texto;
+}
+
+// ==========================
+// FALLBACK AUTOMÁTICO
+// ==========================
+async function gerarComFallback(opcoes) {
+  const ordem = [opcoes.modelo, "gpt-4o", "claude-sonnet-4"];
+  
+  for (const modelo of ordem) {
+    try {
+      console.log(`⚙️ Tentando com modelo: ${modelo}`);
+      const resultado = await generateScenePrompts({ ...opcoes, modelo });
+      return { modelo, resultado };
+    } catch (err) {
+      console.log(`❌ Falhou com ${modelo}:`, err.message);
+      if (modelo === ordem[ordem.length - 1]) {
+        // Último modelo, lançar erro
+        throw err;
+      }
+    }
+  }
+  
+  throw new Error("Todos modelos falharam.");
+}
+
+app.post('/api/generate', verifyToken, async (req, res) => {
   try {
+    const { modelo, roteiro, totalCenas, palavrasPorCena = 150 } = req.body || {};
+
+    if (!roteiro || !modelo || !totalCenas) {
+      return res.status(400).json({ ok: false, error: 'Parâmetros obrigatórios: modelo, roteiro, totalCenas' });
+    }
+
+    const total = Number(totalCenas);
+    if (!Number.isInteger(total) || total <= 0) {
+      return res.status(400).json({ ok: false, error: 'totalCenas deve ser um número inteiro positivo.' });
+    }
+
+    const palavrasCena = Math.max(10, Number(palavrasPorCena) || 150);
+    const tokensPorCena = Math.max(50, Math.round(palavrasCena * 1.9));
+
     const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
     if (!userSettingsRow) throw new Error('Utilizador não encontrado.');
-    const userSettings = userSettingsRow.settings ? JSON.parse(userSettingsRow.settings) : {};
 
+    const userSettings = userSettingsRow.settings ? JSON.parse(userSettingsRow.settings) : {};
+    const geminiKeys = (Array.isArray(userSettings.gemini) ? userSettings.gemini : [userSettings.gemini])
+      .filter(k => k && typeof k === 'string' && k.trim() !== '');
+    const gptKey = (userSettings.gpt || '').trim();
+    const claudeKey = (userSettings.claude || '').trim();
+
+    const prompt = montarPromptDeCena(roteiro, total, palavrasCena);
+
+    const fallbackMatrix = [
+      { provider: 'gemini', models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+      { provider: 'gpt', models: ['gpt-4o'] },
+      { provider: 'claude', models: ['claude-3-5-sonnet'] }
+    ];
+
+    const determineProvider = (modelKey) => {
+      if (!modelKey) return null;
+      if (modelKey.includes('gemini')) return 'gemini';
+      if (modelKey.startsWith('gpt-')) return 'gpt';
+      if (modelKey.startsWith('claude')) return 'claude';
+      return null;
+    };
+
+    const normalizedInitialModel = normalizeModelKey(modelo);
+    const primaryProvider = determineProvider(normalizedInitialModel);
+
+    const attempts = [];
+    const pushAttempt = (provider, modelName) => {
+      if (!provider || !modelName) return;
+      if (attempts.find(item => item.model === modelName)) return;
+      attempts.push({ provider, model: modelName });
+    };
+
+    // Priorizar modelo solicitado
+    pushAttempt(primaryProvider, normalizedInitialModel || modelo);
+
+    // Adicionar fallback padrão
+    for (const group of fallbackMatrix) {
+      for (const m of group.models) {
+        pushAttempt(group.provider, m);
+      }
+    }
+
+    let saidaFinal = null;
+    let modeloUtilizado = null;
+
+    console.log(`📊 Requisição de geração: Modelo="${modelo}", totalCenas=${total}, palavrasPorCena=${palavrasCena}, tokensPorCena=${tokensPorCena}`);
+
+    for (const tentativa of attempts) {
+      const { provider, model: modelName } = tentativa;
+      const modelKey = normalizeModelKey(modelName);
+
+      // Verificar disponibilidade de chave antes de tentar
+      if (provider === 'gemini' && geminiKeys.length === 0) {
+        console.log(`⚠️ Pulando ${modelName}: nenhuma chave Gemini disponível.`);
+        continue;
+      }
+      if (provider === 'gpt' && !gptKey) {
+        console.log(`⚠️ Pulando ${modelName}: chave GPT ausente.`);
+        continue;
+      }
+      if (provider === 'claude' && !claudeKey) {
+        console.log(`⚠️ Pulando ${modelName}: chave Claude ausente.`);
+        continue;
+      }
+
+      let maxOutputTokens;
+      try {
+        maxOutputTokens = calcularMaxOutputTokens(modelKey, total, tokensPorCena);
+      } catch (calcErr) {
+        console.log(`⚠️ Não foi possível calcular tokens para ${modelName}: ${calcErr.message}`);
+        continue;
+      }
+
+      console.log(`⚙️ Tentando modelo ${modelName} (provider ${provider}) com maxOutputTokens=${maxOutputTokens}`);
+
+      try {
+        let resposta;
+
+        if (provider === 'gemini') {
+          const key = geminiKeys[0];
+          resposta = await chamarGemini(modelName, prompt, maxOutputTokens, key);
+        } else if (provider === 'gpt') {
+          resposta = await chamarOpenAI(modelName, prompt, maxOutputTokens, gptKey);
+        } else if (provider === 'claude') {
+          resposta = await chamarClaude(modelName, prompt, maxOutputTokens, claudeKey);
+        } else {
+          console.log(`⚠️ Provider desconhecido "${provider}" para modelo ${modelName}.`);
+          continue;
+        }
+
+        if (verificarIntegridade(resposta, total)) {
+          saidaFinal = resposta;
+          modeloUtilizado = modelName;
+          console.log("✅ Integração perfeita. Todas as cenas estão presentes.");
+          break;
+        } else {
+          console.log(`❌ Modelo ${modelName} NÃO respeitou o número de cenas.`);
+        }
+      } catch (err) {
+        console.log(`❌ Falhou no modelo ${modelName}:`, err.message);
+      }
+    }
+
+    if (!saidaFinal) {
+      throw new Error("Nenhum modelo conseguiu gerar as cenas corretamente.");
+    }
+
+    res.json({ ok: true, texto: saidaFinal, modelo: modeloUtilizado || modelo });
+  } catch (err) {
+    console.error("❌ ERRO /api/generate:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================
+// ENDPOINT LEGADO PARA COMPATIBILIDADE (formato antigo: prompt, model, schema, maxOutputTokens)
+// ==========================
+app.post('/api/generate-legacy', verifyToken, async (req, res) => {
+  try {
+    const { prompt, model, schema, maxOutputTokens } = req.body;
+    
+    if (!prompt || !model) {
+      return res.status(400).json({ error: 'Parâmetros obrigatórios: prompt, model' });
+    }
+    
+    // Buscar configurações do usuário
+    const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
+    if (!userSettingsRow) {
+      return res.status(404).json({ error: 'Utilizador não encontrado.' });
+    }
+    
+    const userSettings = userSettingsRow.settings ? JSON.parse(userSettingsRow.settings) : {};
+    const geminiKeys = (Array.isArray(userSettings.gemini) ? userSettings.gemini : [userSettings.gemini])
+      .filter(k => k && typeof k === 'string' && k.trim() !== '');
+    const gptKey = (userSettings.gpt || '').trim();
+    const claudeKey = (userSettings.claude || '').trim();
+    
+    // Normalizar nome do modelo para a API (remover espaços, ajustar formato)
+    const normalizeModelName = (modelName) => {
+      if (!modelName) return modelName;
+      // Mapear nomes comuns para IDs de API
+      const modelLower = modelName.toLowerCase().trim();
+      if (modelLower.includes('gemini-2.5-pro')) return 'gemini-2.5-pro';
+      if (modelLower.includes('gemini-2.5-flash')) return 'gemini-2.5-flash';
+      if (modelLower.includes('gemini-1.5-pro')) return 'gemini-1.5-pro';
+      if (modelLower.includes('gemini-1.5-flash')) return 'gemini-1.5-flash';
+      if (modelLower.includes('gpt-4o')) return 'gpt-4o';
+      if (modelLower.includes('gpt-4')) return 'gpt-4';
+      if (modelLower.includes('claude-3-5-sonnet')) return 'claude-3-5-sonnet';
+      if (modelLower.includes('claude-3-5-haiku')) return 'claude-3-5-haiku';
+      // Retornar original se não encontrar mapeamento
+      return modelName.replace(/\s+/g, '-').toLowerCase();
+    };
+    
+    const apiModelName = normalizeModelName(model);
+    
+    // Determinar provider
+    const modelLower = model.toLowerCase();
+    const isGemini = modelLower.includes('gemini');
+    const isGPT = modelLower.startsWith('gpt-') || modelLower.includes('gpt');
+    const isClaude = modelLower.startsWith('claude');
+    
+    let result;
+    let apiSource;
+    
+    try {
+      if (isGemini && geminiKeys.length > 0) {
+        const geminiKey = geminiKeys[0];
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${apiModelName}:generateContent?key=${geminiKey}`;
+        
+        const payload = {
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            maxOutputTokens: maxOutputTokens || 8192,
+            temperature: 0.7
+          }
+        };
+        
+        // Adicionar schema se fornecido
+        if (schema) {
+          payload.generationConfig.response_mime_type = "application/json";
+          payload.generationConfig.response_schema = schema;
+        }
+        
+        const response = await callApiWithRetries(() =>
+          axios.post(apiUrl, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 300000
+          })
+        );
+        
+        const candidate = response.data?.candidates?.[0];
+        if (!candidate) throw new Error("Resposta vazia do Gemini.");
+        if (candidate.finishReason === "MAX_TOKENS") throw new Error("MAX_TOKENS: Resposta cortada");
+        
+        const text = candidate.content?.parts?.[0]?.text;
+        if (!text || !text.trim()) throw new Error("Resposta vazia do Gemini.");
+        
+        // Tentar parsear como JSON se schema foi solicitado
+        if (schema) {
+          try {
+            result = { data: JSON.parse(text.trim()) };
+          } catch (e) {
+            result = { data: text.trim() };
+          }
+        } else {
+          result = { data: text.trim() };
+        }
+        
+        apiSource = `Gemini (${apiModelName || model})`;
+        
+      } else if (isGPT && gptKey) {
+        const body = {
+          model: apiModelName || model,
+          max_tokens: maxOutputTokens || 4096,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7
+        };
+        
+        // GPT não suporta schema nativo, mas podemos incluir no prompt
+        if (schema) {
+          body.messages[0].content += `\n\nRESPONDA APENAS COM JSON VÁLIDO no seguinte formato:\n${JSON.stringify(schema, null, 2)}`;
+        }
+        
+        const response = await callApiWithRetries(() =>
+          axios.post('https://api.openai.com/v1/chat/completions', body, {
+            headers: {
+              'Authorization': `Bearer ${gptKey}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 300000
+          })
+        );
+        
+        const text = response.data?.choices?.[0]?.message?.content?.trim();
+        if (!text) throw new Error("Resposta vazia da OpenAI.");
+        
+        // Tentar parsear como JSON se schema foi solicitado
+        if (schema) {
+          try {
+            result = { data: JSON.parse(text) };
+          } catch (e) {
+            result = { data: text };
+          }
+        } else {
+          result = { data: text };
+        }
+        
+        apiSource = `OpenAI (${apiModelName || model})`;
+        
+      } else if (isClaude && claudeKey) {
+        const response = await callApiWithRetries(() =>
+          axios.post('https://api.anthropic.com/v1/messages', {
+            model: apiModelName,
+            max_tokens: maxOutputTokens || 4096,
+            messages: [{ role: "user", content: prompt + (schema ? `\n\nRESPONDA APENAS COM JSON VÁLIDO.` : '') }]
+          }, {
+            headers: {
+              'x-api-key': claudeKey,
+              'anthropic-version': '2023-06-01',
+              'Content-Type': 'application/json'
+            },
+            timeout: 300000
+          })
+        );
+        
+        const text = response.data?.content?.[0]?.text?.trim();
+        if (!text) throw new Error("Resposta vazia da Claude.");
+        
+        // Tentar parsear como JSON se schema foi solicitado
+        if (schema) {
+          try {
+            result = { data: JSON.parse(text) };
+          } catch (e) {
+            result = { data: text };
+          }
+        } else {
+          result = { data: text };
+        }
+        
+        apiSource = `Claude (${apiModelName || model})`;
+        
+      } else {
+        throw new Error("Nenhuma chave de API disponível para o modelo selecionado.");
+      }
+      
+      res.json({ 
+        ...result,
+        apiSource,
+        model: apiModelName || model
+      });
+      
+    } catch (error) {
+      console.error(`❌ Erro na geração legada (modelo: ${model}, apiModelName: ${apiModelName}):`, error.message);
+      console.error('Stack trace:', error.stack);
+      throw error;
+    }
+    
+  } catch (err) {
+    console.error("❌ ERRO /api/generate-legacy:", err);
+    console.error('Stack trace completo:', err.stack);
+    res.status(500).json({ 
+      error: err.message || "Erro ao gerar conteúdo",
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+// ==========================
+// ENDPOINT DE STREAMING LEGADO (formato antigo com stream: true)
+// ==========================
+app.post('/api/generate-stream', verifyToken, async (req, res) => {
+  try {
+    const { prompt, model, stream, maxOutputTokens, temperature, schema } = req.body;
+    
+    if (!prompt || !model) {
+      return res.status(400).json({ error: 'Parâmetros obrigatórios: prompt, model' });
+    }
+    
+    if (!stream) {
+      // Se não for streaming, redirecionar para endpoint legado normal
+      return res.redirect(307, '/api/generate-legacy');
+    }
+    
+    // Buscar configurações do usuário
+    const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
+    if (!userSettingsRow) {
+      return res.status(404).json({ error: 'Utilizador não encontrado.' });
+    }
+    
+    const userSettings = userSettingsRow.settings ? JSON.parse(userSettingsRow.settings) : {};
+    const geminiKeys = (Array.isArray(userSettings.gemini) ? userSettings.gemini : [userSettings.gemini])
+      .filter(k => k && typeof k === 'string' && k.trim() !== '');
+    const gptKey = (userSettings.gpt || '').trim();
+    const claudeKey = (userSettings.claude || '').trim();
+    
+    // Determinar provider
+    const modelLower = model.toLowerCase();
+    const isGemini = modelLower.includes('gemini');
+    const isGPT = modelLower.startsWith('gpt-') || modelLower.includes('gpt');
+    const isClaude = modelLower.startsWith('claude');
+    
+    // Configurar headers para streaming
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    let apiResponseStream;
+    
+    try {
+      if (isGemini && geminiKeys.length > 0) {
+        const geminiKey = geminiKeys[0];
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${geminiKey}&alt=sse`;
+        
+        const generationConfig = {
+          maxOutputTokens: maxOutputTokens || 8192,
+          temperature: temperature !== undefined ? temperature : 0.7
+        };
+        
+        if (schema) {
+          generationConfig.response_mime_type = "application/json";
+          generationConfig.response_schema = schema;
+        }
+        
+        const response = await callApiWithRetries(() =>
+          axios.post(apiUrl, {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig
+          }, {
+            responseType: 'stream',
+            timeout: 300000
+          })
+        );
+        
+        apiResponseStream = response.data;
+        
+      } else if (isGPT && gptKey) {
+        const body = {
+          model: model,
+          messages: [{ role: "user", content: prompt }],
+          stream: true
+        };
+        
+        if (maxOutputTokens) body.max_tokens = maxOutputTokens;
+        if (temperature !== undefined) body.temperature = temperature;
+        
+        if (schema) {
+          body.messages[0].content += `\n\nRESPONDA APENAS COM JSON VÁLIDO no seguinte formato:\n${JSON.stringify(schema, null, 2)}`;
+        }
+        
+        const response = await callApiWithRetries(() =>
+          axios.post('https://api.openai.com/v1/chat/completions', body, {
+            headers: {
+              'Authorization': `Bearer ${gptKey}`,
+              'Content-Type': 'application/json'
+            },
+            responseType: 'stream',
+            timeout: 300000
+          })
+        );
+        
+        apiResponseStream = response.data;
+        
+      } else if (isClaude && claudeKey) {
+        const body = {
+          model: model,
+          max_tokens: maxOutputTokens || 4096,
+          messages: [{ role: "user", content: prompt + (schema ? `\n\nRESPONDA APENAS COM JSON VÁLIDO.` : '') }],
+          stream: true
+        };
+        
+        if (temperature !== undefined) body.temperature = temperature;
+        
+        const response = await callApiWithRetries(() =>
+          axios.post('https://api.anthropic.com/v1/messages', body, {
+            headers: {
+              'x-api-key': claudeKey,
+              'anthropic-version': '2023-06-01',
+              'Content-Type': 'application/json'
+            },
+            responseType: 'stream',
+            timeout: 300000
+          })
+        );
+        
+        apiResponseStream = response.data;
+        
+      } else {
+        res.write(`data: ${JSON.stringify({ error: "Nenhuma chave de API disponível para o modelo selecionado." })}\n\n`);
+        res.end();
+        return;
+      }
+      
+      // Pipe do stream da API para o cliente
+      apiResponseStream.on('data', (chunk) => {
+        res.write(chunk);
+      });
+      
+      apiResponseStream.on('end', () => {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      });
+      
+      apiResponseStream.on('error', (error) => {
+        console.error('Erro no stream:', error);
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
+      });
+      
+      // Limpar stream se cliente desconectar
+      req.on('close', () => {
+        if (apiResponseStream && typeof apiResponseStream.destroy === 'function') {
+          apiResponseStream.destroy();
+        }
+      });
+      
+    } catch (error) {
+      console.error(`❌ Erro no streaming (modelo: ${model}):`, error.message);
+      res.write(`data: ${JSON.stringify({ error: error.message || "Erro ao gerar conteúdo" })}\n\n`);
+      res.end();
+    }
+    
+  } catch (err) {
+    console.error("❌ ERRO /api/generate-stream:", err);
+    res.write(`data: ${JSON.stringify({ error: err.message || "Erro ao gerar conteúdo" })}\n\n`);
+    res.end();
+  }
+});
+
+// ==========================
+// ENDPOINT ESPECÍFICO PARA GERAÇÃO DE PROMPTS DE CENA
+// ==========================
+app.post('/api/generate-scene-prompts', verifyToken, async (req, res) => {
+  try {
+    const { modelo, roteiro, cenas } = req.body;
+    
+    if (!modelo || !roteiro || !cenas) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: "Parâmetros obrigatórios: modelo, roteiro, cenas" 
+      });
+    }
+    
+    // Obter chaves de API do usuário
+    const userSettingsRow = await dbGet('SELECT settings FROM users WHERE id = ?', [req.user.id]);
+    if (!userSettingsRow) {
+      return res.status(404).json({ ok: false, error: 'Utilizador não encontrado.' });
+    }
+    
+    const userSettings = userSettingsRow.settings ? JSON.parse(userSettingsRow.settings) : {};
     const claudeKey = userSettings.claude;
     const gptKey = userSettings.gpt;
     const geminiKeys = (Array.isArray(userSettings.gemini) ? userSettings.gemini : [userSettings.gemini]).filter(k => k && k.trim() !== '');
     
-    // Detecção do provider baseado no modelo selecionado
-    let provider;
-    const modelLower = model.toLowerCase().trim();
+    // Gerar com fallback automático
+    const { modelo: modeloUsado, resultado } = await gerarComFallback({
+      modelo,
+      roteiro,
+      totalCenas: cenas,
+      geminiKeys,
+      gptKey,
+      claudeKey,
+      schema: true // Sempre usar schema JSON
+    });
     
-    if (modelLower.startsWith('claude-')) {
-        provider = 'claude';
-    } else if (modelLower.startsWith('gpt-')) {
-        provider = 'gpt';
-    } else if (modelLower.includes('gemini') || modelLower.startsWith('gemini-')) {
-        provider = 'gemini';
-    } else {
-        // Fallback: se não identificar, assume Gemini (compatibilidade)
-        console.warn(`⚠️ Modelo não reconhecido: "${model}". Assumindo Gemini como padrão.`);
-        provider = 'gemini';
-    }
+    // Parsear JSON da resposta usando a função existente
+    const dados = parseJsonRobustly(resultado, modeloUsado);
     
-    console.log(`📊 Requisição de geração: Modelo="${model}", Provider="${provider}"`);
-
-    // Obter limites do modelo e validar tokens
-    const tokenLimits = getTokenLimits(model);
-    const promptTokens = estimateTokens(prompt);
-    const requestedOutputTokens = typeof maxOutputTokens === 'number' && maxOutputTokens > 0
-      ? Math.min(Math.floor(maxOutputTokens), tokenLimits.maxOutputTokens)
-      : tokenLimits.maxOutputTokens;
+    res.json({ 
+      ok: true, 
+      data: dados,
+      modelo: modeloUsado,
+      apiSource: modeloUsado.startsWith('gpt') ? `OpenAI (${modeloUsado})` : 
+                 modeloUsado.startsWith('claude') ? `Claude (${modeloUsado})` : 
+                 `Gemini (${modeloUsado})`
+    });
     
-    // Verificar se cabe nos limites
-    const totalTokens = promptTokens + requestedOutputTokens;
-    if (totalTokens > tokenLimits.maxContextLength) {
-        const errorMsg = `Limite de tokens excedido. Prompt: ~${promptTokens} tokens, Saída solicitada: ${requestedOutputTokens} tokens, Total: ${totalTokens} tokens. Limite do modelo ${model}: ${tokenLimits.maxContextLength} tokens. Reduza o tamanho do prompt ou a saída esperada.`;
-        console.error(`❌ ${errorMsg}`);
-        return res.status(400).json({ message: errorMsg });
-    }
-    
-    const sanitizedMaxOutputTokens = requestedOutputTokens;
-    const sanitizedTemperature = typeof temperature === 'number' && !Number.isNaN(temperature)
-      ? Math.min(Math.max(temperature, 0), 1.5)
-      : undefined;
-
-    if (stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders();
-
-        let apiResponseStream;
-        
-        // Função auxiliar para fazer requisição streaming com retry
-        const makeStreamingRequest = async (attemptNumber = 0, maxAttempts = 3) => {
-            try {
-                if (provider === 'claude') {
-                    if (!claudeKey) throw new Error("Chave de API Claude não configurada.");
-                    const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-                    const claudeTemperature = sanitizedTemperature ?? 0.7;
-                    const response = await axios.post('https://api.anthropic.com/v1/messages', {
-                        model: model,
-                        max_tokens: claudeMaxTokens,
-                        temperature: claudeTemperature,
-                        messages: [{ role: "user", content: prompt }], stream: true
-                    }, { 
-                        headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-                        responseType: 'stream',
-                        timeout: 300000
-                    });
-                    return response.data;
-                } else if (provider === 'gpt') {
-                    if (!gptKey) throw new Error("Chave de API OpenAI (GPT) não configurada.");
-                    const body = {
-                        model: model,
-                        messages: [{ role: "user", content: prompt }],
-                        stream: true
-                    };
-                    if (sanitizedMaxOutputTokens) {
-                        body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
-                    } else {
-                        body.max_tokens = tokenLimits.maxOutputTokens;
-                    }
-                    if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
-                    const response = await axios.post('https://api.openai.com/v1/chat/completions', body, {
-                        headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
-                        responseType: 'stream',
-                        timeout: 300000
-                    });
-                    return response.data;
-                } else {
-                    if (geminiKeys.length === 0) throw new Error("Nenhuma chave de API Gemini está configurada.");
-                    const key = geminiKeys[0];
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
-                    const generationConfig = {};
-                    if (schema) generationConfig.response_mime_type = "application/json";
-                    generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-                    if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
-                    const response = await axios.post(apiUrl, {
-                        contents: [{ role: "user", parts: [{ text: prompt }] }],
-                        generationConfig
-                    }, { 
-                        responseType: 'stream',
-                        timeout: 300000
-                    });
-                    return response.data;
-                }
-            } catch (error) {
-                const statusCode = error.response?.status;
-                const errorCode = error.response?.data?.error?.code;
-                const errorMessage = error.response?.data?.error?.message || error.message || "";
-                
-                // Verificar se é rate limit
-                if ((statusCode === 429 || errorCode === 'rate_limit_exceeded' || errorMessage.toLowerCase().includes('rate limit')) && attemptNumber < maxAttempts - 1) {
-                    console.warn(`⚠️ [Streaming] Rate limit atingido (tentativa ${attemptNumber + 1}/${maxAttempts})`);
-                    
-                    // Extrair tempo de espera
-                    let waitTime = Math.min(2000 * Math.pow(2, attemptNumber), 60000);
-                    const waitMatch = errorMessage.match(/try again in (\d+(?:\.\d+)?)\s*(ms|s|second|seconds)/i);
-                    if (waitMatch) {
-                        const value = parseFloat(waitMatch[1]);
-                        const unit = waitMatch[2].toLowerCase();
-                        waitTime = unit.startsWith('ms') ? Math.ceil(value * 1.1) : Math.ceil(value * 1000 * 1.1);
-                        console.log(`⏱️ [Streaming] Aguardando ${(waitTime / 1000).toFixed(1)}s (extraído da API)...`);
-                    } else {
-                        console.log(`⏱️ [Streaming] Aguardando ${(waitTime / 1000).toFixed(1)}s (backoff exponencial)...`);
-                    }
-                    
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    return makeStreamingRequest(attemptNumber + 1, maxAttempts);
-                }
-                
-                throw error;
-            }
-        };
-        
-        apiResponseStream = await makeStreamingRequest();
-        apiResponseStream.pipe(res);
-        req.on('close', () => {
-            if (apiResponseStream && typeof apiResponseStream.destroy === 'function') apiResponseStream.destroy();
-        });
-    } else {
-        let aiResult, apiSource;
-        if (provider === 'claude') {
-            if (!claudeKey) throw new Error("A chave da API Claude não está configurada.");
-            apiSource = `Claude (${model})`;
-            // Respeitar limite máximo de tokens de saída do modelo Claude
-            const claudeMaxTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-            const claudeTemperature = sanitizedTemperature ?? 0.7;
-            const response = await callApiWithRetries(() => axios.post('https://api.anthropic.com/v1/messages', {
-                model: model,
-                max_tokens: claudeMaxTokens,
-                temperature: claudeTemperature,
-                messages: [{ role: "user", content: prompt }],
-                ...(schema && { system: "Sua tarefa é gerar uma resposta no formato JSON. Não inclua NENHUM texto explicativo, introduções, ou qualquer formatação fora do próprio JSON. A sua saída deve ser um JSON puro e válido que possa ser diretamente processado por uma máquina." })
-            }, {
-                headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-                timeout: 300000
-            }));
-            const content = response.data.content[0].text;
-            aiResult = schema ? parseJsonRobustly(content, "Claude") : { text: content };
-        } else if (provider === 'gpt') {
-            if (!gptKey) throw new Error("A chave da API OpenAI (GPT) não está configurada.");
-            apiSource = `OpenAI (${model})`;
-            const body = {
-                model: model,
-                messages: schema ? [
-                    { 
-                        role: "system", 
-                        content: "Você DEVE retornar APENAS JSON válido. Não inclua texto antes ou depois. Não use markdown. Todas as strings entre aspas duplas. Sem vírgulas finais." 
-                    },
-                    { role: "user", content: prompt }
-                ] : [{ role: "user", content: prompt }],
-                ...(schema && { response_format: { type: "json_object" } })
-            };
-            // Respeitar limite máximo de tokens de saída do modelo
-            if (sanitizedMaxOutputTokens) {
-                body.max_tokens = Math.min(sanitizedMaxOutputTokens, tokenLimits.maxOutputTokens);
-            } else {
-                body.max_tokens = tokenLimits.maxOutputTokens;
-            }
-            if (sanitizedTemperature !== undefined) body.temperature = sanitizedTemperature;
-            const response = await callApiWithRetries(() => axios.post('https://api.openai.com/v1/chat/completions', body, {
-                headers: { 'Authorization': `Bearer ${gptKey}`, 'Content-Type': 'application/json' },
-                timeout: 300000
-            }));
-            const content = response.data.choices[0].message.content;
-            aiResult = schema ? parseJsonRobustly(content, "OpenAI") : { text: content };
-        } else {
-             if (geminiKeys.length === 0) throw new Error("Nenhuma chave de API Gemini está configurada.");
-             const key = geminiKeys[0];
-             apiSource = `Gemini (${model})`;
-             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-             const generationConfig = {};
-             if (schema) {
-                 generationConfig.response_mime_type = "application/json";
-                 // Instrução adicional no prompt para garantir JSON válido
-                 const enhancedPrompt = `${prompt}\n\nCRITICO: Retorne APENAS JSON válido. Não inclua texto antes ou depois. Não use markdown code blocks. Todas as strings entre aspas duplas. Sem vírgulas finais. O JSON deve ser completo e válido, sem cortes.`;
-                 generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-                 if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
-                 const response = await callApiWithRetries(() => axios.post(apiUrl, {
-                    contents: [{ role: "user", parts: [{ text: enhancedPrompt }] }],
-                    generationConfig
-                 }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
-                 
-                 // Verificar se há bloqueios de segurança ou MAX_TOKENS
-                 if (response.data.candidates && response.data.candidates.length > 0) {
-                     const candidate = response.data.candidates[0];
-                     if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
-                         throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
-                     }
-                     
-                     // Tratar MAX_TOKENS - resposta foi cortada
-                     if (candidate.finishReason === 'MAX_TOKENS') {
-                         const text = candidate.content?.parts?.[0]?.text;
-                         if (text && text.trim().length > 0) {
-                             // Tentar parsear mesmo que incompleto
-                             try {
-                                 aiResult = parseJsonRobustly(text, "Gemini");
-                                 console.warn(`⚠️ [Gemini] Resposta cortada por MAX_TOKENS, mas JSON parcial foi parseado. Considere reduzir o tamanho do prompt ou usar um modelo com mais tokens de saída.`);
-                             } catch (parseError) {
-                                 throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS). O prompt é muito longo ou a saída esperada excede o limite. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
-                             }
-                         } else {
-                             throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS) e está vazia. O prompt é muito longo. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
-                         }
-                     } else {
-                         const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-                         if (!text || text.trim().length === 0) {
-                             console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
-                             throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
-                         }
-                         aiResult = parseJsonRobustly(text, "Gemini");
-                     }
-                 } else {
-                     throw new Error('Resposta da API Gemini sem candidatos. Tente novamente.');
-                 }
-             } else {
-                 // Respeitar limite máximo de tokens de saída do modelo Gemini
-                 generationConfig.maxOutputTokens = Math.min(sanitizedMaxOutputTokens || tokenLimits.maxOutputTokens, tokenLimits.maxOutputTokens);
-                 if (sanitizedTemperature !== undefined) generationConfig.temperature = sanitizedTemperature;
-                 const response = await callApiWithRetries(() => axios.post(apiUrl, {
-                    contents: [{ role: "user", parts: [{ text: prompt }] }],
-                    generationConfig
-                 }, { headers: { 'Content-Type': 'application/json' }, timeout: 300000 }));
-                 
-                 // Verificar se há bloqueios de segurança ou MAX_TOKENS
-                 if (response.data.candidates && response.data.candidates.length > 0) {
-                     const candidate = response.data.candidates[0];
-                     if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') {
-                         throw new Error(`Conteudo bloqueado por seguranca (${candidate.finishReason}). Tente reformular o prompt.`);
-                     }
-                     
-                     // Tratar MAX_TOKENS - resposta foi cortada
-                     if (candidate.finishReason === 'MAX_TOKENS') {
-                         const text = candidate.content?.parts?.[0]?.text;
-                         if (text && text.trim().length > 0) {
-                             // Retornar texto parcial com aviso
-                             aiResult = { text: text.trim() };
-                             console.warn(`⚠️ [Gemini] Resposta cortada por MAX_TOKENS. Considere usar um modelo diferente (recomendado: gpt-4o).`);
-                         } else {
-                             throw new Error(`Resposta da API Gemini foi cortada (MAX_TOKENS) e está vazia. O prompt é muito longo. Tente reduzir o tamanho do prompt ou use um modelo diferente (recomendado: gpt-4o).`);
-                         }
-                     } else {
-                         const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-                         if (!text || text.trim().length === 0) {
-                             console.error('Resposta Gemini vazia. Dados recebidos:', JSON.stringify(response.data, null, 2));
-                             throw new Error('Resposta da API Gemini vazia ou malformada. Tente novamente ou use um modelo diferente.');
-                         }
-                         aiResult = { text: text.trim() };
-                     }
-                 } else {
-                     throw new Error('Resposta da API Gemini sem candidatos. Tente novamente.');
-                 }
-             }
-        }
-        res.json({ data: aiResult, apiSource });
-    }
-  } catch (error) {
-    if (error.response) {
-      console.error("Erro na API de IA - Status:", error.response.status);
-      console.error("Erro na API de IA - Detalhes:", error.response.data);
-    } else {
-      console.error("Erro de requisição para a API de IA:", error.message);
-    }
-
-    const apiError = error.response?.data?.error?.message || error.message;
-
-    if (res.headersSent) {
-        console.error("Erro ocorreu durante o streaming. Encerrando a resposta.");
-        res.end();
-    } else {
-        return res.status(500).json({ message: `Falha ao gerar conteúdo: ${apiError}` });
-    }
+  } catch (err) {
+    console.error("❌ ERRO /api/generate-scene-prompts:", err);
+    res.status(500).json({ 
+      ok: false, 
+      error: err.message || "Erro ao gerar prompts de cena" 
+    });
   }
 });
 
@@ -3719,6 +4418,20 @@ async function processScriptTtsJob(jobId, jobData) {
             throw new Error('FFmpeg não está disponível na VPS. FFmpeg é necessário para juntar os arquivos de áudio. Por favor, instale o FFmpeg no servidor.');
         }
         
+        console.log(`🔧 Preparando para juntar ${tempFilePaths.length} arquivos de áudio...`);
+        console.log(`🔧 FFmpeg Path: ${ffmpegPath}`);
+        
+        // Verificar se todos os arquivos existem antes de tentar juntar
+        for (const filePath of tempFilePaths) {
+            try {
+                const stats = await fs.stat(filePath);
+                console.log(`   ✅ Arquivo encontrado: ${filePath} (${stats.size} bytes)`);
+            } catch (err) {
+                console.error(`   ❌ Arquivo não encontrado: ${filePath}`);
+                throw new Error(`Arquivo de áudio não encontrado: ${filePath}`);
+            }
+        }
+        
         await new Promise((resolve, reject) => {
             const command = ffmpeg();
             tempFilePaths.forEach(filePath => command.input(filePath));
@@ -3733,11 +4446,16 @@ async function processScriptTtsJob(jobId, jobData) {
                     '-fflags', '+genpts', // Gera timestamps para melhor sincronização
                     '-avoid_negative_ts', 'make_zero' // Evita problemas de timestamps negativos
                 ])
-                .on('error', (err) => {
+                .on('start', (commandLine) => {
+                    console.log(`🚀 Iniciando FFMPEG com comando: ${commandLine}`);
+                })
+                .on('error', (err, stdout, stderr) => {
                     console.error(`❌ Erro crítico no FFMPEG ao juntar áudios: ${err.message}`);
-                    console.error(`   FFmpeg é necessário para juntar os arquivos de áudio.`);
+                    console.error(`   Stdout: ${stdout || 'N/A'}`);
+                    console.error(`   Stderr: ${stderr || 'N/A'}`);
+                    console.error(`   FFmpeg Path: ${ffmpegPath}`);
                     console.error(`   Verifique se o FFmpeg está instalado corretamente na VPS.`);
-                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. FFmpeg é necessário para esta operação.`));
+                    reject(new Error(`Erro no FFMPEG ao juntar áudios: ${err.message}. Verifique os logs do servidor para mais detalhes.`));
                 })
                 .on('end', () => {
                     console.log(`✅ Áudios juntados com sucesso: ${tempFilePaths.length} partes combinadas em ${finalFilePath}`);
@@ -5924,6 +6642,32 @@ async function startServer() {
         console.log(`Conectado ao banco de dados SQLite em: ${DB_PATH}`);
 
         await initializeDb();
+        
+        // Endpoint de diagnóstico do sistema (para verificar FFMPEG)
+        app.get('/api/system/diagnostics', async (req, res) => {
+            try {
+                const ffmpegAvailable = await checkFfmpegAvailable();
+                res.json({
+                    success: true,
+                    ffmpeg: {
+                        available: ffmpegAvailable,
+                        path: ffmpegPath,
+                        status: ffmpegAvailable ? 'OK' : 'Não disponível'
+                    },
+                    server: {
+                        nodeVersion: process.version,
+                        platform: process.platform,
+                        uptime: process.uptime()
+                    }
+                });
+            } catch (error) {
+                console.error('Erro ao obter diagnósticos:', error);
+                res.status(500).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+        });
 
         // Função para verificar se a porta está disponível
         const isPortAvailable = (port) => {

@@ -33,7 +33,7 @@ const TOKEN_LIMITS = {
     },
     'claude-3-5-haiku': {
         maxContextLength: 200000,
-        maxOutputTokens: 8192
+        maxOutputTokens: 4096
     },
     'claude-3-opus': {
         maxContextLength: 200000,
@@ -43,17 +43,25 @@ const TOKEN_LIMITS = {
         maxContextLength: 200000,
         maxOutputTokens: 4096
     },
+    'claude-sonnet-4': {
+        maxContextLength: 200000,
+        maxOutputTokens: 8192
+    },
+    'claude-sonnet-4.5': {
+        maxContextLength: 200000,
+        maxOutputTokens: 8192
+    },
 
     // ==============================
     // GOOGLE GEMINI
     // ==============================
     'gemini-2.5-pro': {
-        maxContextLength: 1000000,
-        maxOutputTokens: 8192
+        maxContextLength: 2000000,
+        maxOutputTokens: 32768
     },
     'gemini-2.5-flash': {
         maxContextLength: 1000000,
-        maxOutputTokens: 8192
+        maxOutputTokens: 16384
     },
     'gemini-2.5-flash-lite': {
         maxContextLength: 1000000,
@@ -102,6 +110,8 @@ function getTokenLimits(model) {
         { key: 'claude-3-5-haiku', match: ['claude-3-5-haiku'] },
         { key: 'claude-3-opus', match: ['claude-3-opus', 'opus'] },
         { key: 'claude-3-sonnet', match: ['claude-3-sonnet'] },
+        { key: 'claude-sonnet-4', match: ['claude-sonnet-4', 'claude-sonnet4', 'sonnet-4'] },
+        { key: 'claude-sonnet-4.5', match: ['claude-sonnet-4.5', 'claude-sonnet4.5', 'sonnet-4.5'] },
         { key: 'gemini-2.5-pro', match: ['gemini-2.5-pro'] },
         { key: 'gemini-2.5-flash-lite', match: ['gemini-2.5-flash-lite'] },
         { key: 'gemini-2.5-flash', match: ['gemini-2.5-flash'] },
