@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Módulos - DarkScript</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .test-pass { background-color: #d4edda; color: #155724; }
+        .test-fail { background-color: #f8d7da; color: #721c24; }
+        .test-skip { background-color: #fff3cd; color: #856404; }
+        .module-card { transition: all 0.3s ease; }
+        .module-card:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6">🧪 Teste de Módulos - DarkScript</h1>
+        
+        <!-- Controles Gerais -->
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Controles Gerais</h2>
+            <div class="flex gap-4 mb-4 flex-wrap">
+                <button 
+                    id="enable-test-mode-btn"
+                    class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                >
+                    ✅ Ativar Modo de Teste
+                </button>
+                <button 
+                    id="disable-test-mode-btn"
+                    class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                >
+                    ❌ Desativar Modo de Teste
+                </button>
+                <button 
+                    id="run-all-tests-btn"
+                    class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                    🧪 Testar Todos os Módulos
+                </button>
+                <button 
+                    id="load-all-modules-btn"
+                    class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+                >
+                    📦 Carregar Todos os Módulos
+                </button>
+            </div>
+            <div id="test-status" class="text-sm text-gray-600">
+                Status: Verificando...
+            </div>
+        </div>
+        
+        <!-- Instruções -->
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">📋 Instruções</h2>
+            <ol class="list-decimal list-inside space-y-2 text-gray-700">
+                <li><strong>Ativar Modo de Teste:</strong> Clique em "Ativar Modo de Teste" para usar mocks das APIs (sem necessidade de chaves de API reais)</li>
+                <li><strong>Recarregar:</strong> Recarregue a página (F5) após ativar/desativar o modo de teste</li>
+                <li><strong>Testar Módulos:</strong> Use os botões abaixo para testar cada módulo individualmente</li>
+                <li><strong>Testar Todos:</strong> Use "Testar Todos os Módulos" para executar testes em lote</li>
+                <li><strong>Console:</strong> Abra o console do navegador (F12) para ver logs detalhados</li>
+            </ol>
+        </div>
+        
+        <!-- Lista de Módulos -->
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">📦 Módulos Disponíveis</h2>
+            <div id="modules-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <p class="text-gray-500">Carregando módulos...</p>
+            </div>
+        </div>
+        
+        <!-- Resultados -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold mb-4">📊 Resultados dos Testes</h2>
+            <div id="test-results" class="space-y-2">
+                <p class="text-gray-500">Nenhum teste executado ainda. Selecione um módulo para testar.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module">
+        // Lista de módulos disponíveis com informações
+        const MODULES = [
+            { id: 'brainstorm', name: 'Brainstorm de Ideias', category: 'criacao', description: 'Gera ideias criativas para vídeos' },
+            { id: 'viral-titles', name: 'Títulos Virais', category: 'criacao', description: 'Cria títulos que geram engajamento' },
+            { id: 'script-writer', name: 'Escritor de Roteiro', category: 'criacao', description: 'Gera roteiros completos para vídeos' },
+            { id: 'translator', name: 'Tradutor de Roteiro', category: 'criacao', description: 'Traduz roteiros para diferentes idiomas' },
+            { id: 'scene-prompts', name: 'Prompts para Cenas', category: 'media', description: 'Gera prompts de imagem para cenas' },
+            { id: 'thumbnail-prompts', name: 'Prompts de Thumbnail', category: 'media', description: 'Gera prompts para thumbnails' },
+            { id: 'image-generator', name: 'Gerador de Imagens', category: 'media', description: 'Gera imagens usando ImageFX' },
+            { id: 'voice-generator', name: 'Gerador de Voz', category: 'media', description: 'Gera narração de voz' },
+            { id: 'script-reviewer', name: 'Revisor de Roteiro', category: 'optimization', description: 'Analisa e otimiza roteiros' },
+            { id: 'description-optimizer', name: 'Otimizador de Descrição', category: 'optimization', description: 'Otimiza descrições de vídeos' },
+            { id: 'video-optimizer', name: 'Otimizador de Video', category: 'optimization', description: 'Analisa e otimiza vídeos' },
+            { id: 'text-splitter', name: 'Divisor de Texto', category: 'optimization', description: 'Divide textos em partes' },
+            { id: 'srt-converter', name: 'Conversor de SRT', category: 'optimization', description: 'Converte texto para SRT' },
+            { id: 'character-detector', name: 'Detector de Personagens', category: 'optimization', description: 'Detecta personagens em roteiros' },
+            { id: 'academy', name: 'Academy', category: 'sistema', description: 'Sistema de aulas e lições' },
+            { id: 'settings', name: 'Configurações', category: 'sistema', description: 'Configurações da aplicação' },
+            { id: 'faq', name: 'FAQ', category: 'sistema', description: 'Perguntas frequentes' },
+            { id: 'admin', name: 'Painel Admin', category: 'sistema', description: 'Painel administrativo' },
+            { id: 'chat', name: 'Chat de Suporte', category: 'sistema', description: 'Chat com suporte' }
+        ];
+        
+        // Funções auxiliares
+        function updateTestStatus() {
+            const statusEl = document.getElementById('test-status');
+            const isEnabled = localStorage.getItem('TEST_MODE') === 'true';
+            statusEl.textContent = `Status: ${isEnabled ? '✅ Modo de Teste ATIVADO' : '❌ Modo de Teste DESATIVADO'}`;
+            statusEl.className = `text-sm ${isEnabled ? 'text-green-600 font-semibold' : 'text-red-600'}`;
+        }
+        
+        function getCategoryColor(category) {
+            const colors = {
+                'criacao': 'bg-blue-100 text-blue-800 border-blue-300',
+                'media': 'bg-purple-100 text-purple-800 border-purple-300',
+                'optimization': 'bg-green-100 text-green-800 border-green-300',
+                'sistema': 'bg-gray-100 text-gray-800 border-gray-300'
+            };
+            return colors[category] || 'bg-gray-100 text-gray-800 border-gray-300';
+        }
+        
+        function renderModulesList() {
+            const modulesListEl = document.getElementById('modules-list');
+            modulesListEl.innerHTML = MODULES.map(module => `
+                <div class="module-card bg-white border-2 rounded-lg p-4 ${getCategoryColor(module.category)}">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <h3 class="font-bold text-lg">${module.name}</h3>
+                            <p class="text-sm text-gray-600 mt-1">${module.description}</p>
+                        </div>
+                        <span class="text-xs px-2 py-1 rounded ${getCategoryColor(module.category)}">${module.category}</span>
+                    </div>
+                    <div class="mt-3 flex gap-2">
+                        <button 
+                            class="test-module-btn bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 flex-1"
+                            data-module-id="${module.id}"
+                        >
+                            🧪 Testar
+                        </button>
+                        <button 
+                            class="load-module-btn bg-gray-600 text-white px-3 py-1 rounded text-sm hover:bg-gray-700"
+                            data-module-id="${module.id}"
+                        >
+                            📦 Carregar
+                        </button>
+                    </div>
+                    <div id="module-status-${module.id}" class="mt-2 text-xs"></div>
+                </div>
+            `).join('');
+            
+            // Adicionar event listeners
+            document.querySelectorAll('.test-module-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const moduleId = btn.dataset.moduleId;
+                    await testModule(moduleId);
+                });
+            });
+            
+            document.querySelectorAll('.load-module-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const moduleId = btn.dataset.moduleId;
+                    await loadModule(moduleId);
+                });
+            });
+        }
+        
+        async function testModule(moduleId) {
+            const statusEl = document.getElementById(`module-status-${moduleId}`);
+            statusEl.textContent = '⏳ Testando...';
+            statusEl.className = 'mt-2 text-xs text-yellow-600';
+            
+            try {
+                // Carregar ModuleLoader
+                const { default: ModuleLoader } = await import('./modules/frontend/loader.js');
+                const loader = window.ModuleLoader || new ModuleLoader();
+                
+                // Tentar carregar o módulo
+                const module = await loader.loadModule(moduleId);
+                
+                // Verificar se o módulo tem handler
+                const hasHandler = typeof module.handler === 'function';
+                const hasInit = typeof module.init === 'function';
+                
+                // Se tiver init, chamar
+                if (hasInit) {
+                    try {
+                        await module.init();
+                    } catch (initError) {
+                        console.warn(`Aviso ao inicializar ${moduleId}:`, initError);
+                    }
+                }
+                
+                statusEl.textContent = `✅ Carregado${hasHandler ? ' (Handler disponível)' : ' (Sem handler)'}`;
+                statusEl.className = 'mt-2 text-xs text-green-600 font-semibold';
+                
+                // Exibir resultado
+                displayResult({
+                    module: moduleId,
+                    status: 'PASS',
+                    message: `Módulo ${moduleId} carregado com sucesso`,
+                    details: {
+                        name: module.name || moduleId,
+                        hasHandler: hasHandler,
+                        hasInit: hasInit,
+                        category: module.category || 'N/A'
+                    }
+                });
+                
+                console.log(`✅ Módulo ${moduleId} testado com sucesso:`, module);
+                
+            } catch (error) {
+                statusEl.textContent = `❌ Erro: ${error.message}`;
+                statusEl.className = 'mt-2 text-xs text-red-600 font-semibold';
+                
+                displayResult({
+                    module: moduleId,
+                    status: 'FAIL',
+                    message: `Erro ao testar módulo ${moduleId}: ${error.message}`,
+                    details: { error: error.toString() }
+                });
+                
+                console.error(`❌ Erro ao testar módulo ${moduleId}:`, error);
+            }
+        }
+        
+        async function loadModule(moduleId) {
+            const statusEl = document.getElementById(`module-status-${moduleId}`);
+            statusEl.textContent = '⏳ Carregando...';
+            statusEl.className = 'mt-2 text-xs text-yellow-600';
+            
+            try {
+                // Carregar ModuleLoader
+                const { default: ModuleLoader } = await import('./modules/frontend/loader.js');
+                const loader = window.ModuleLoader || new ModuleLoader();
+                
+                // Carregar o módulo
+                const module = await loader.loadModule(moduleId);
+                
+                statusEl.textContent = '✅ Carregado';
+                statusEl.className = 'mt-2 text-xs text-green-600 font-semibold';
+                
+                console.log(`✅ Módulo ${moduleId} carregado:`, module);
+                
+            } catch (error) {
+                statusEl.textContent = `❌ Erro: ${error.message}`;
+                statusEl.className = 'mt-2 text-xs text-red-600 font-semibold';
+                
+                console.error(`❌ Erro ao carregar módulo ${moduleId}:`, error);
+            }
+        }
+        
+        async function testAllModules() {
+            const resultsEl = document.getElementById('test-results');
+            resultsEl.innerHTML = '<p class="text-gray-500">⏳ Executando testes em todos os módulos...</p>';
+            
+            const results = [];
+            
+            for (const module of MODULES) {
+                const statusEl = document.getElementById(`module-status-${module.id}`);
+                if (statusEl) {
+                    statusEl.textContent = '⏳ Testando...';
+                    statusEl.className = 'mt-2 text-xs text-yellow-600';
+                }
+                
+                try {
+                    const { default: ModuleLoader } = await import('./modules/frontend/loader.js');
+                    const loader = window.ModuleLoader || new ModuleLoader();
+                    const loadedModule = await loader.loadModule(module.id);
+                    
+                    const hasHandler = typeof loadedModule.handler === 'function';
+                    const hasInit = typeof loadedModule.init === 'function';
+                    
+                    if (hasInit) {
+                        try {
+                            await loadedModule.init();
+                        } catch (initError) {
+                            console.warn(`Aviso ao inicializar ${module.id}:`, initError);
+                        }
+                    }
+                    
+                    results.push({
+                        module: module.id,
+                        status: 'PASS',
+                        message: `✅ ${module.name} - Carregado com sucesso`,
+                        details: { hasHandler, hasInit }
+                    });
+                    
+                    if (statusEl) {
+                        statusEl.textContent = '✅ OK';
+                        statusEl.className = 'mt-2 text-xs text-green-600 font-semibold';
+                    }
+                    
+                } catch (error) {
+                    results.push({
+                        module: module.id,
+                        status: 'FAIL',
+                        message: `❌ ${module.name} - ${error.message}`,
+                        details: { error: error.toString() }
+                    });
+                    
+                    if (statusEl) {
+                        statusEl.textContent = '❌ Erro';
+                        statusEl.className = 'mt-2 text-xs text-red-600 font-semibold';
+                    }
+                }
+                
+                // Pequeno delay entre testes
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            displayAllResults(results);
+        }
+        
+        async function loadAllModules() {
+            try {
+                const { default: ModuleLoader } = await import('./modules/frontend/loader.js');
+                const loader = window.ModuleLoader || new ModuleLoader();
+                
+                const handlers = await loader.loadAllModules();
+                
+                alert(`✅ ${loader.listModules().length} módulos carregados com sucesso!\n\nMódulos: ${loader.listModules().join(', ')}`);
+                console.log('✅ Todos os módulos carregados:', loader.listModules());
+            } catch (error) {
+                console.error('❌ Erro ao carregar todos os módulos:', error);
+                alert(`❌ Erro ao carregar módulos: ${error.message}`);
+            }
+        }
+        
+        function displayResult(result) {
+            const resultsEl = document.getElementById('test-results');
+            const className = result.status === 'PASS' ? 'test-pass' : 'test-fail';
+            
+            const html = `
+                <div class="p-3 rounded ${className} mb-2">
+                    <p><strong>${result.message}</strong></p>
+                    ${result.details ? `<pre class="mt-2 text-xs overflow-auto">${JSON.stringify(result.details, null, 2)}</pre>` : ''}
+                </div>
+            `;
+            
+            resultsEl.insertAdjacentHTML('afterbegin', html);
+        }
+        
+        function displayAllResults(results) {
+            const resultsEl = document.getElementById('test-results');
+            
+            const passed = results.filter(r => r.status === 'PASS').length;
+            const failed = results.filter(r => r.status === 'FAIL').length;
+            
+            let html = `
+                <div class="mb-4 p-4 bg-gray-100 rounded">
+                    <p><strong>Total:</strong> ${results.length} testes</p>
+                    <p class="text-green-600"><strong>✅ Passou:</strong> ${passed}</p>
+                    <p class="text-red-600"><strong>❌ Falhou:</strong> ${failed}</p>
+                </div>
+            `;
+            
+            html += '<div class="space-y-2">';
+            results.forEach((result) => {
+                const className = result.status === 'PASS' ? 'test-pass' : 'test-fail';
+                html += `
+                    <div class="p-3 rounded ${className}">
+                        <p><strong>${result.message}</strong></p>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            resultsEl.innerHTML = html;
+        }
+        
+        // Inicializar quando DOM estiver pronto
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Tentar carregar mocks (opcional)
+                try {
+                    await import('./modules/testing/api-mocks.js');
+                    console.log('✅ Mocks carregados');
+                } catch (e) {
+                    console.warn('⚠️ Mocks não disponíveis:', e.message);
+                }
+                
+                // Verificar status inicial
+                updateTestStatus();
+                
+                // Renderizar lista de módulos
+                renderModulesList();
+                
+                // Configurar event listeners para botões gerais
+                const enableBtn = document.getElementById('enable-test-mode-btn');
+                const disableBtn = document.getElementById('disable-test-mode-btn');
+                const runAllBtn = document.getElementById('run-all-tests-btn');
+                const loadAllBtn = document.getElementById('load-all-modules-btn');
+                
+                if (enableBtn) {
+                    enableBtn.addEventListener('click', () => {
+                        localStorage.setItem('TEST_MODE', 'true');
+                        alert('✅ Modo de teste ativado! Recarregue a página para aplicar.');
+                        updateTestStatus();
+                    });
+                }
+                
+                if (disableBtn) {
+                    disableBtn.addEventListener('click', () => {
+                        localStorage.removeItem('TEST_MODE');
+                        alert('❌ Modo de teste desativado! Recarregue a página para aplicar.');
+                        updateTestStatus();
+                    });
+                }
+                
+                if (runAllBtn) {
+                    runAllBtn.addEventListener('click', testAllModules);
+                }
+                
+                if (loadAllBtn) {
+                    loadAllBtn.addEventListener('click', loadAllModules);
+                }
+                
+            } catch (error) {
+                console.error('Erro ao inicializar:', error);
+                const statusEl = document.getElementById('test-status');
+                if (statusEl) {
+                    statusEl.textContent = `Status: ❌ Erro ao inicializar - ${error.message}`;
+                    statusEl.className = 'text-sm text-red-600';
+                }
+            }
+        });
+    </script>
+</body>
+</html>

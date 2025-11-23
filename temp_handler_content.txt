@@ -1,0 +1,1348 @@
+﻿    window.handlers['generate-scene-prompts'] = async (e) => {
+            const startTime = Date.now();
+            const text = document.getElementById('scene-text')?.value.trim();
+            const model = document.getElementById('scene-prompts-model-select')?.value;
+            const imageModel = document.getElementById('scene-image-model')?.value;
+            const lang = document.getElementById('scene-lang')?.value;
+            const includeText = document.getElementById('scene-include-text')?.checked;
+            const characters = document.getElementById('scene-characters')?.value.trim();
+            
+            // Log para debug: verificar qual modelo foi selecionado
+            console.log(`ðŸŽ¬ Gerando prompts de cena com modelo: "${model}"`);
+            
+            if (!text || !model || !imageModel || !lang) {
+                window.showSuccessToast("Por favor, preencha todos os campos.");
+                return;
+            }
+
+            const mode = document.getElementById('generation-mode')?.value;
+            const wordCount = parseInt(document.getElementById('scene-word-count')?.value, 10);
+            const style = document.getElementById('scene-style')?.value;
+            const styleInstruction = style && style !== 'none' ? ` O estilo visual principal deve ser '${window.removeAccents(style)}'.` : '';
+            const textInstruction = includeText 
+                ? `Se o prompt incluir texto para ser renderizado na imagem, esse texto DEVE estar no idioma "${window.removeAccents(lang)}".`
+                : "O prompt NAO DEVE incluir nenhuma instrucao para adicionar texto.";
+            const characterInstruction = characters ? ` Mantenha a consistencia dos seguintes personagens em todas as cenas: ${window.removeAccents(characters)}.` : '';
+            const rawWords = text.split(/\s+/).filter(Boolean);
+            const totalWords = rawWords.length;
+            const estimatedScenes = Math.max(1, Math.round(totalWords / 90));
+            const minScenes = Math.max(1, Math.floor(totalWords / 140));
+            const maxScenes = Math.max(estimatedScenes + 2, Math.ceil(totalWords / 60));
+
+            let chunks = [];
+            window.scenePromptResults.data = []; // Limpa os resultados anteriores
+            window.scenePromptResults.originalScript = text; // CorreÃ§Ã£o 5: Salvar o roteiro original
+
+            if (mode === 'manual') {
+                if (wordCount <= 0) {
+                    window.showSuccessToast('Por favor, insira um numero de palavras valido.');
+                    return;
+                }
+                for (let i = 0; i < rawWords.length; i += wordCount) {
+                    chunks.push(rawWords.slice(i, i + wordCount).join(' '));
+                }
+                window.scenePromptResults.total_prompts = chunks.length;
+            } else { // MODO AUTOMATICO
+                chunks.push(text); // No modo automatico, processamos o texto inteiro de uma vez
+                window.scenePromptResults.total_prompts = null; // Sera definido apos a resposta da IA
+            }
+
+            const totalEstimate = mode === 'manual' ? Math.max(chunks.length, 1) : Math.max(estimatedScenes, 1);
+            const initialMessage = mode === 'manual'
+                ? `Gerando ${chunks.length} prompt(s) com blocos de ${wordCount} palavra(s)...`
+                : `A IA estÃ¡ analisando ${totalWords} palavras para sugerir cerca de ${estimatedScenes} cenas (entre ${minScenes} e ${maxScenes}, se necessÃ¡rio).`;
+
+            window.appState.sceneGenStatus = { 
+                active: true, 
+                current: 0, 
+                total: totalEstimate, 
+                message: initialMessage, 
+                subMessage: '',
+                chunkTotal: 0,
+                chunkCurrent: 0,
+                error: false 
+            };
+            window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+            window.addToLog(mode === 'manual'
+                ? `A gerar ${chunks.length} prompt(s) com blocos de ${wordCount} palavra(s)...`
+                : `A IA estÃ¡ a calcular automaticamente o nÃºmero ideal de cenas (~${estimatedScenes}) para o roteiro.`);
+
+            try {
+                if (mode === 'manual') {
+                    const schema = {
+                        type: "OBJECT",
+                        properties: {
+                            scene_description: { type: "STRING" },
+                            prompt_text: { type: "STRING" },
+                            original_text: { type: "STRING" }
+                        },
+                        required: ["scene_description", "prompt_text", "original_text"]
+                    };
+
+                    for (let index = 0; index < chunks.length; index++) { // Use let for index
+                        const chunk = chunks[index];
+                        const prompt = `Analise contexto geral, depois foque no trecho especifico. Gere 1 prompt de imagem em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+âš ï¸âš ï¸âš ï¸ REGRA CRÃTICA OBRIGATÃ“RIA - TAMANHO DO PROMPT:
+- O prompt_text DEVE ter entre 600 e 1200 caracteres (nÃ£o mais, nÃ£o menos)
+- Verifique o tamanho do prompt_text antes de responder
+- Se o prompt estiver muito longo, reduza detalhes desnecessÃ¡rios mantendo a essÃªncia
+- Se estiver muito curto, adicione mais detalhes visuais relevantes
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON objeto valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: {"prompt_text": "...", "scene_description": "...", "original_text": "..."}
+- O JSON deve ser valido e completo, sem cortes
+
+CONTEXTO:
+"""${window.removeAccents(text)}"""
+
+TRECHO:
+"""${window.removeAccents(chunk)}"""`;
+                        
+                        window.appState.sceneGenStatus.subMessage = `Trecho ${index + 1} de ${chunks.length}`;
+                        window.appState.sceneGenStatus.message = `Gerando cena ${index + 1} de ${chunks.length}...`;
+                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+
+                        let retries = 3;
+                        let success = false;
+                        while (retries > 0 && !success) {
+                            try {
+                                console.log(`ðŸ“¤ Enviando requisiÃ§Ã£o para API: modelo="${model}"`);
+                                
+                                // Criar simulador de progresso para modo manual
+                                let manualProgressSimulator = null;
+                                let manualProgressCancelled = false;
+                                const baseProgress = (index / chunks.length) * 100;
+                                const progressPerScene = (1 / chunks.length) * 100;
+                                
+                                const simulateManualProgress = () => {
+                                    const progressSteps = [
+                                        { offset: 0.2, delay: 300, msg: `ðŸ“¡ Enviando cena ${index + 1}`, sub: `Conectando com IA...` },
+                                        { offset: 0.4, delay: 400, msg: `ðŸ§  IA analisando cena ${index + 1}`, sub: `Processando ${chunk.split(' ').length} palavras...` },
+                                        { offset: 0.6, delay: 500, msg: `âœï¸ IA gerando prompt ${index + 1}`, sub: `Escrevendo descriÃ§Ã£o em inglÃªs...` },
+                                        { offset: 0.8, delay: 300, msg: `ðŸŽ¨ IA refinando prompt ${index + 1}`, sub: `Otimizando para ${imageModel}...` }
+                                    ];
+                                    
+                                    let stepIndex = 0;
+                                    const runNextStep = () => {
+                                        if (manualProgressCancelled || stepIndex >= progressSteps.length) return;
+                                        
+                                        const step = progressSteps[stepIndex];
+                                        window.appState.sceneGenStatus.stageProgress = baseProgress + (progressPerScene * step.offset);
+                                        window.appState.sceneGenStatus.message = step.msg;
+                                        window.appState.sceneGenStatus.subMessage = step.sub;
+                                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                        stepIndex++;
+                                        
+                                        if (stepIndex < progressSteps.length) {
+                                            manualProgressSimulator = setTimeout(runNextStep, step.delay);
+                                        }
+                                    };
+                                    
+                                    runNextStep();
+                                };
+                                
+                                // Iniciar simulaÃ§Ã£o
+                                simulateManualProgress();
+                                
+                                const result = await window.apiRequestWithFallback('/api/generate-legacy', 'POST', { 
+                                    prompt, 
+                                    model, 
+                                    schema,
+                                    maxOutputTokens: 4096
+                                });
+                                
+                                // Cancelar simulaÃ§Ã£o
+                                manualProgressCancelled = true;
+                                if (manualProgressSimulator) clearTimeout(manualProgressSimulator);
+                                
+                                console.log(`âœ… Resposta recebida da API para modelo "${model}"`);
+                                
+                                // Tratamento robusto da resposta
+                                let sceneData = null;
+                                
+                                if (result.data) {
+                                    if (typeof result.data === 'object' && !Array.isArray(result.data)) {
+                                        // Verifica se tem as propriedades esperadas
+                                        if (result.data.prompt_text || result.data.prompt) {
+                                            sceneData = {
+                                                scene_description: result.data.scene_description || result.data.description || `Cena ${index + 1}`,
+                                                prompt_text: result.data.prompt_text || result.data.prompt || '',
+                                                original_text: result.data.original_text || result.data.original || chunk
+                                            };
+                                        }
+                                    } else if (Array.isArray(result.data) && result.data.length > 0) {
+                                        // Se retornou array, pega o primeiro item
+                                        const firstItem = result.data[0];
+                                        if (firstItem.prompt_text || firstItem.prompt) {
+                                            sceneData = {
+                                                scene_description: firstItem.scene_description || firstItem.description || `Cena ${index + 1}`,
+                                                prompt_text: firstItem.prompt_text || firstItem.prompt || '',
+                                                original_text: firstItem.original_text || firstItem.original || chunk
+                                            };
+                                        }
+                                    }
+                                }
+                                
+                                if (sceneData && sceneData.prompt_text) {
+                                    // VALIDAÃ‡ÃƒO CRÃTICA: Garantir que prompt_text nÃ£o ultrapasse 1200 caracteres
+                                    const MAX_PROMPT_CHARS = 1200;
+                                    if (sceneData.prompt_text.length > MAX_PROMPT_CHARS) {
+                                        console.warn(`âš ï¸ Cena ${index + 1}: prompt_text tem ${sceneData.prompt_text.length} caracteres, truncando para ${MAX_PROMPT_CHARS}`);
+                                        // Truncar mantendo palavras completas
+                                        let truncated = sceneData.prompt_text.substring(0, MAX_PROMPT_CHARS);
+                                        const lastSpace = truncated.lastIndexOf(' ');
+                                        if (lastSpace > MAX_PROMPT_CHARS - 50) { // Se o Ãºltimo espaÃ§o estÃ¡ prÃ³ximo do limite
+                                            truncated = truncated.substring(0, lastSpace);
+                                        }
+                                        sceneData.prompt_text = truncated.trim();
+                                        // Log interno apenas (nÃ£o exibir para o usuÃ¡rio)
+                                        console.log(`[INTERNO] Cena ${index + 1}: prompt truncado de ${sceneData.prompt_text.length + (sceneData.prompt_text.length - truncated.length)} para ${truncated.length} caracteres`);
+                                    }
+                                    
+                                    window.scenePromptResults.data.push(sceneData);
+                                    window.appState.sceneGenStatus.current = window.scenePromptResults.data.length;
+                                    const progressPercent = Math.round((window.appState.sceneGenStatus.current / window.appState.sceneGenStatus.total) * 100);
+                                    window.appState.sceneGenStatus.message = `Cena ${window.scenePromptResults.data.length}/${chunks.length} pronta.`;
+                                    window.appState.sceneGenStatus.subMessage = `Trecho ${index + 1} concluÃ­do - ${progressPercent}%`;
+                                    window.appState.sceneGenStatus.stageProgress = progressPercent;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    success = true;
+                                } else {
+                                    throw new Error(`Formato de resposta invÃ¡lido para cena ${index + 1}`);
+                                }
+                            } catch (error) {
+                                retries--;
+                                const isJsonError = error.message && (
+                                    error.message.includes('JSON') || 
+                                    error.message.includes('malformado') ||
+                                    error.message.includes('incompleto') ||
+                                    error.message.includes('parse') ||
+                                    error.message.includes('Unexpected')
+                                );
+                                
+                                if (isJsonError && retries > 0) {
+                                    window.addToLog(`Erro de JSON na cena ${index + 1}. Tentando novamente com instruÃ§Ãµes mais explÃ­citas... (${retries} tentativas restantes)`, true);
+                                    // Adicionar instruÃ§Ã£o mais explÃ­cita no retry
+                                    prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON objeto, sem nenhum texto adicional. O JSON deve comeÃ§ar com { e terminar com }. Todas as strings entre aspas duplas.`;
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    continue; // Tenta novamente com o prompt melhorado
+                                } else if (retries > 0) {
+                                    window.addToLog(`Erro na cena ${index + 1}. Tentando novamente... (${retries} tentativas restantes)`, true);
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                } else {
+                                    window.addToLog(`Erro ao gerar prompt para a cena ${index + 1}: ${error.message}`, true);
+                                    console.error(`Erro detalhado para cena ${index + 1}:`, error);
+                                }
+                            }
+                        }
+                        
+                        if (!success) {
+                            window.addToLog(`Nao foi possivel gerar prompt para a cena ${index + 1} apos 3 tentativas.`, true);
+                        }
+                        // OtimizaÃ§Ã£o 4: Adicionar delay fixo
+                        await new Promise(resolve => setTimeout(resolve, 800));
+                    }
+
+                    window.scenePromptResults.total_prompts = window.scenePromptResults.data.length;
+                    window.appState.sceneGenStatus.current = window.scenePromptResults.data.length;
+                    window.appState.sceneGenStatus.total = Math.max(window.appState.sceneGenStatus.total, window.scenePromptResults.data.length);
+                    window.appState.sceneGenStatus.message = `Roteiro dividido em ${window.scenePromptResults.data.length} cena(s) (modo manual).`;
+                    window.appState.sceneGenStatus.subMessage = `Total final: ${window.scenePromptResults.data.length} cena(s).`;
+                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                } else { // MODO AUTOMATICO
+                    // PRIMEIRO: Analisar todo o roteiro para calcular quantidade EXATA de prompts
+                    window.addToLog(`Analisando roteiro completo (${totalWords} palavras) para calcular quantidade exata de prompts...`, false);
+                    
+                    // Iniciar progresso em 5%
+                    window.appState.sceneGenStatus.stageProgress = 5;
+                    window.appState.sceneGenStatus.message = `Analisando roteiro completo...`;
+                    window.appState.sceneGenStatus.subMessage = `Calculando quantidade exata de prompts necessÃ¡rios`;
+                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                    
+                    // FunÃ§Ã£o auxiliar para estimar tokens (aproximaÃ§Ã£o: ~3.5 caracteres por token)
+                    const estimateTokens = (text) => Math.ceil(text.length / 3.5);
+                    
+                    // Obter limites do modelo selecionado usando a funÃ§Ã£o de matching inteligente
+                    const tokenLimits = window.getTokenLimitsFrontend(model);
+                    const maxContextLength = tokenLimits.maxContextLength;
+                    const maxOutputTokens = tokenLimits.maxOutputTokens;
+                    
+                    console.log(`ðŸ“Š Limites de tokens para modelo "${model}": Contexto=${maxContextLength}, SaÃ­da=${maxOutputTokens}`);
+                    
+                    // Calcular tokens do prompt base
+                    const basePromptTemplate = `Diretor de arte: Divida roteiro em cenas visuais logicas. Roteiro: ~${totalWords} palavras. Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} JSON array: [{prompt_text, scene_description (PT), original_text}].\n\nROTEIRO:\n"""`;
+                    const basePromptTokens = estimateTokens(basePromptTemplate);
+                    const scriptTokens = estimateTokens(text);
+                    const availableTokensForOutput = maxContextLength - basePromptTokens - scriptTokens - 500; // Margem de seguranÃ§a
+                    
+                    // Calcular quantidade exata de prompts baseado nos tokens disponÃ­veis
+                    // Cada prompt de cena usa aproximadamente: 150 tokens (prompt_text) + 50 tokens (scene_description) + 100 tokens (original_text) = ~300 tokens por cena
+                    const tokensPerScene = 300;
+                    const maxScenesByTokens = Math.floor(availableTokensForOutput / tokensPerScene);
+                    
+                    // Calcular quantidade baseada em palavras (1 cena a cada ~90 palavras)
+                    const scenesByWords = Math.max(1, Math.round(totalWords / 90));
+                    
+                    // Usar o menor valor entre os dois cÃ¡lculos para garantir que cabe nos tokens
+                    const exactSceneCount = Math.min(maxScenesByTokens, scenesByWords, maxScenes);
+                    
+                    console.log(`ðŸ“Š AnÃ¡lise do roteiro:`);
+                    console.log(`   Palavras: ${totalWords}`);
+                    console.log(`   Tokens do script: ~${scriptTokens}`);
+                    console.log(`   Tokens disponÃ­veis para saÃ­da: ~${availableTokensForOutput}`);
+                    console.log(`   Cenas calculadas por palavras: ${scenesByWords}`);
+                    console.log(`   Cenas mÃ¡ximas por tokens: ${maxScenesByTokens}`);
+                    console.log(`   âœ… Quantidade EXATA de prompts: ${exactSceneCount}`);
+                    
+                    window.addToLog(`Quantidade exata calculada: ${exactSceneCount} prompts de cena`, false);
+                    
+                    // Normalizar nome do modelo para verificaÃ§Ãµes
+                    const modelLower = window.normalizeModelName(model);
+                    const isGeminiModel = modelLower.includes('gemini');
+                    const isFlashLite = modelLower.includes('flash-lite');
+                    const isFlash = modelLower.includes('flash') && !isFlashLite;
+                    const isPro = modelLower.includes('pro');
+                    
+                    // Verificar se precisa de chunking baseado nos limites de tokens
+                    const totalPromptTokens = basePromptTokens + scriptTokens;
+                    const shouldUseChunkedAuto = totalPromptTokens > (maxContextLength * 0.7); // Usa chunking se usar mais de 70% do contexto
+                    
+                    // Ajustar limites de chunking baseado no modelo
+                    const AUTO_CHUNK_WORD_THRESHOLD = isFlashLite ? 1000 : (isFlash ? 600 : 800);
+                    const MAX_WORDS_PER_AUTO_CHUNK = isFlashLite ? 450 : (isFlash ? 250 : (isPro ? 350 : 450));
+                    
+                    // Usar quantidade EXATA calculada
+                    const autoSceneGuidance = `Roteiro: ~${totalWords} palavras. Gere EXATAMENTE ${exactSceneCount} cenas. Cobertura completa, ordem cronologica. IMPORTANTE: Voce DEVE gerar EXATAMENTE ${exactSceneCount} cenas, nem mais nem menos.`;
+
+                    if (shouldUseChunkedAuto) {
+                        // Mostrar progresso INICIAL
+                        window.appState.sceneGenStatus.active = true;
+                        window.appState.sceneGenStatus.current = 0;
+                        window.appState.sceneGenStatus.total = exactSceneCount;
+                        window.appState.sceneGenStatus.stageProgress = 1;
+                        window.appState.sceneGenStatus.message = "ðŸš€ Iniciando geraÃ§Ã£o de prompts";
+                        window.appState.sceneGenStatus.subMessage = `Preparando para gerar ${exactSceneCount} cena(s)...`;
+                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Delay para usuÃ¡rio VER que iniciou
+                        
+                        const chunkSchema = {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    scene_description: { type: "STRING" },
+                                    prompt_text: { type: "STRING" },
+                                    original_text: { type: "STRING" }
+                                },
+                                required: ["scene_description", "prompt_text", "original_text"]
+                            }
+                        };
+
+                        window.addToLog("Texto extenso detectado. Gemini sera processado em partes para evitar limite de tokens.", false);
+                        
+                        // Mostrar que estÃ¡ dividindo em partes
+                        window.appState.sceneGenStatus.stageProgress = 3;
+                        window.appState.sceneGenStatus.message = "ðŸ“ Analisando roteiro";
+                        window.appState.sceneGenStatus.subMessage = "Dividindo roteiro em partes processÃ¡veis...";
+                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                        
+                        let chunkedSegments = window.splitTextIntoWordChunks(text, MAX_WORDS_PER_AUTO_CHUNK);
+                        if (!chunkedSegments.length) {
+                            throw new Error("Nao foi possivel preparar o roteiro para o modo automatico.");
+                        }
+
+                        // Usar quantidade EXATA calculada para o total
+                        window.appState.sceneGenStatus.total = exactSceneCount;
+                        window.appState.sceneGenStatus.chunkTotal = chunkedSegments.length;
+                        window.appState.sceneGenStatus.chunkCurrent = 0;
+                        window.appState.sceneGenStatus.stageProgress = 5;
+                        window.appState.sceneGenStatus.message = `ðŸ“‹ Roteiro dividido em ${chunkedSegments.length} parte(s)`;
+                        window.appState.sceneGenStatus.subMessage = `Preparando geraÃ§Ã£o de ${exactSceneCount} cena(s) totais`;
+                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Delay para usuÃ¡rio VER a divisÃ£o
+                        let accumulatedScenes = 0;
+
+                        // PrÃ©-calcular distribuiÃ§Ã£o aproximada de cenas (meta, nÃ£o obrigatÃ³rio)
+                        let chunkSceneDistribution = [];
+                        let remainingScenes = exactSceneCount;
+                        
+                        for (let i = 0; i < chunkedSegments.length; i++) {
+                            const chunk = chunkedSegments[i];
+                            const chunkRatio = chunk.wordCount / totalWords;
+                            
+                            // Calcular cenas para este chunk baseado na proporÃ§Ã£o (estimativa)
+                            let chunkScenes = Math.max(1, Math.round(chunkRatio * exactSceneCount));
+                            
+                            // Garantir que nÃ£o ultrapasse o que resta
+                            chunkScenes = Math.min(chunkScenes, remainingScenes);
+                            
+                            chunkSceneDistribution.push(chunkScenes);
+                            remainingScenes -= chunkScenes;
+                        }
+                        
+                        // Se ainda restam cenas, distribuir no Ãºltimo chunk
+                        if (remainingScenes > 0) {
+                            chunkSceneDistribution[chunkSceneDistribution.length - 1] += remainingScenes;
+                        }
+                        
+                        console.log(`ðŸ“Š Meta de distribuiÃ§Ã£o por chunk:`, chunkSceneDistribution);
+                        console.log(`ðŸ“Š Total estimado: ${chunkSceneDistribution.reduce((a, b) => a + b, 0)}`);
+
+                        const lotesInfo = window.calcularLotes(model, exactSceneCount);
+                        const modelOutputLimit = lotesInfo.saidaMax;
+                        const maxPromptsPerRequest = lotesInfo.maxPromptsPorRequest;
+                        console.log(`ðŸ“ Capacidade do modelo "${model}": ${modelOutputLimit} tokens de saÃ­da â†’ ${maxPromptsPerRequest} prompts de ${window.SCENE_TOKENS_PER_PROMPT || 300} tokens por requisiÃ§Ã£o.`);
+                        console.log(`ðŸ“¦ Plano de lotes:`, lotesInfo.lotes);
+
+                        if (chunkSceneDistribution.some(value => value > maxPromptsPerRequest)) {
+                            window.addToLog(`âš ï¸ Roteiro muito grande para uma Ãºnica chamada (${model}). Distribuindo prompts em lotes de atÃ© ${maxPromptsPerRequest} cena(s) por requisiÃ§Ã£o.`, false);
+                        }
+
+                        const sceneProcessingQueue = window.createSceneProcessingQueue(chunkedSegments, chunkSceneDistribution, maxPromptsPerRequest, 2);
+                        window.appState.sceneGenStatus.chunkTotal = sceneProcessingQueue.length;
+                        console.log(`ðŸ“¦ Total de lotes a processar (apÃ³s ajustar pelo limite do modelo): ${sceneProcessingQueue.length}`);
+                        
+                        for (let chunkIndex = 0; chunkIndex < sceneProcessingQueue.length; chunkIndex++) {
+                            const currentChunk = sceneProcessingQueue[chunkIndex];
+                            const chunkRatio = currentChunk.wordCount / totalWords;
+                            const chunkMaxScenes = currentChunk.sceneTarget;
+                            const chunkPercent = Math.max(1, Math.round(chunkRatio * 100));
+
+                            // Preparar informaÃ§Ãµes do modelo (permite fallback automÃ¡tico)
+                            let chunkModel = model;
+                            let chunkModelLower = window.normalizeModelName(chunkModel);
+                            let chunkTokenLimits = window.getTokenLimitsFrontend(chunkModel);
+                            let chunkModelMaxTokens = chunkTokenLimits.maxOutputTokens;
+                            let chunkIsFlashLite = chunkModelLower.includes('flash-lite');
+                            let chunkIsFlash = chunkModelLower.includes('flash') && !chunkIsFlashLite;
+                            let chunkIsPro = chunkModelLower.includes('pro') || chunkModelLower.includes('gpt-4');
+
+                            const refreshModelParams = () => {
+                                chunkModelLower = window.normalizeModelName(chunkModel);
+                                chunkTokenLimits = window.getTokenLimitsFrontend(chunkModel);
+                                chunkModelMaxTokens = chunkTokenLimits.maxOutputTokens;
+                                chunkIsFlashLite = chunkModelLower.includes('flash-lite');
+                                chunkIsFlash = chunkModelLower.includes('flash') && !chunkIsFlashLite;
+                                chunkIsPro = chunkModelLower.includes('pro') || chunkModelLower.includes('gpt-4');
+                            };
+
+                            const computeTokensPerScene = () => chunkIsFlash ? 600 : (chunkIsPro ? 550 : 500);
+                            const computeTargetPromptWords = () => chunkIsFlash ? '100-150' : '150-200';
+                            const computeMaxDescWords = () => chunkIsFlash ? '10-15' : '15-20';
+                            const computeConcisenessNote = () => chunkIsFlash ? ' EXTREMAMENTE CONCISO mas DESCRITIVO.' : ' Seja CONCISO mas VISUAL.';
+
+                            refreshModelParams();
+                            let tokensPerScene = 0;
+                            let safetyMargin = 0;
+                            let calculatedTokens = 0;
+                            let chunkMaxOutputTokens = 0;
+                            let chunkPrompt = '';
+
+                            const assignModelParameters = () => {
+                                tokensPerScene = computeTokensPerScene();
+                                safetyMargin = 1000;
+                                calculatedTokens = (chunkMaxScenes * tokensPerScene) + safetyMargin;
+                                chunkMaxOutputTokens = Math.min(chunkModelMaxTokens, Math.max(2000, calculatedTokens));
+                            };
+
+                            assignModelParameters();
+
+                            if (calculatedTokens > chunkModelMaxTokens && chunkModel !== window.RECOMMENDED_MODEL || "gpt-4o") {
+                                window.addToLog(`âš ï¸ Modelo ${chunkModel} nÃ£o comporta ${chunkMaxScenes} cenas (${calculatedTokens} tokens). Alternando automaticamente para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`, true);
+                                console.warn(`âš ï¸ Chunk ${chunkIndex + 1}: modelo "${chunkModel}" nÃ£o suporta ${calculatedTokens} tokens. Fazendo fallback para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`);
+                                chunkModel = window.RECOMMENDED_MODEL || "gpt-4o";
+                                model = chunkModel; // usar fallback nos prÃ³ximos chunks tambÃ©m
+                                refreshModelParams();
+                                chunkModelMaxTokens = chunkTokenLimits.maxOutputTokens;
+                                assignModelParameters();
+                                console.log(`ðŸ”„ Fallback: usando modelo "${chunkModel}" com limite de ${chunkModelMaxTokens} tokens para saÃ­da.`);
+                            }
+
+                            console.log(`ðŸŽ¯ Chunk ${chunkIndex + 1}: modelo="${chunkModel}", ${chunkMaxScenes} cenas Ã— ${tokensPerScene} tokens/cena = ${calculatedTokens} tokens (usando: ${chunkMaxOutputTokens})`);
+
+                            // CRÃTICO: Calcular maxOutputTokens baseado em prompts de 600-1200 caracteres
+                            // Cada cena: ~1000 chars (mÃ©dia) + 100 chars (description + original_text) + overhead JSON
+                            // 1000 chars â‰ˆ 250 tokens, entÃ£o ~400 tokens por cena completa
+                            // Para garantir: usar 500 tokens por cena + margem de seguranÃ§a
+                            window.appState.sceneGenStatus.chunkCurrent = chunkIndex + 1;
+                            window.appState.sceneGenStatus.message = `Processando parte ${chunkIndex + 1}/${sceneProcessingQueue.length}`;
+                            window.appState.sceneGenStatus.subMessage = `Gerando ${chunkMaxScenes} cena(s) para esta parte (~${chunkPercent}% do roteiro)`;
+                            // Atualizar progresso visual ANTES de processar
+                            window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+
+                            // Ajustar limites de caracteres para prompts ideais (600-1200 caracteres)
+                            // Caracteres â‰ˆ palavras Ã— 6 (mÃ©dia em inglÃªs com espaÃ§os/pontuaÃ§Ã£o)
+                            const minPromptChars = 600;
+                            const maxPromptChars = 1200;
+                            const baseProgressBeforeChunk = window.appState.sceneGenStatus.total > 0
+                                ? (window.appState.sceneGenStatus.current / window.appState.sceneGenStatus.total) * 100
+                                : 0;
+                            const chunkProgressShare = window.appState.sceneGenStatus.total > 0
+                                ? (chunkMaxScenes / window.appState.sceneGenStatus.total) * 100
+                                : (sceneProcessingQueue.length > 0 ? (100 / sceneProcessingQueue.length) : 0);
+                            const updateStageProgress = (fraction) => {
+                                const target = baseProgressBeforeChunk + (chunkProgressShare * fraction);
+                                window.appState.sceneGenStatus.stageProgress = Math.min(99, Math.max(baseProgressBeforeChunk, target));
+                            };
+                            
+                            let retries = 3;
+                            let chunkScenes = null;
+
+                            while (retries > 0) {
+                                try {
+                                    refreshModelParams();
+                                    assignModelParameters();
+
+                                    if (calculatedTokens > chunkModelMaxTokens) {
+                                        if (chunkModel !== window.RECOMMENDED_MODEL || "gpt-4o") {
+                                            window.addToLog(`âš ï¸ Modelo ${chunkModel} nÃ£o comporta ${chunkMaxScenes} cenas (${calculatedTokens} tokens). Alternando automaticamente para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`, true);
+                                            console.warn(`âš ï¸ Chunk ${chunkIndex + 1}: modelo "${chunkModel}" nÃ£o suporta ${calculatedTokens} tokens. Fazendo fallback para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`);
+                                            chunkModel = window.RECOMMENDED_MODEL || "gpt-4o";
+                                            model = chunkModel;
+                                            continue; // Recalcular com o novo modelo
+                                        } else {
+                                            throw new Error(`MODEL_CAPACITY_EXCEEDED:${chunkModel}:${calculatedTokens}/${chunkModelMaxTokens}`);
+                                        }
+                                    }
+
+                                    const targetPromptWords = computeTargetPromptWords(); // ~600-1200 caracteres
+                                    const maxDescWords = computeMaxDescWords();
+                                    const concisenessNote = computeConcisenessNote();
+
+                                    chunkPrompt = `Diretor de arte: Divida o roteiro em cenas visuais logicas baseadas no CONTEUDO REAL do texto. Este e o trecho ${chunkIndex + 1} de ${sceneProcessingQueue.length} (aprox. ${currentChunk.wordCount} palavras, ${chunkPercent}% do roteiro). 
+
+âš ï¸ OBRIGATORIO - QUANTIDADE EXATA:
+Voce DEVE gerar EXATAMENTE ${chunkMaxScenes} cenas. Nem ${chunkMaxScenes - 1}, nem ${chunkMaxScenes + 1}. EXATAMENTE ${chunkMaxScenes} cenas.
+
+REGRAS CRITICAS:
+1. Cada cena deve representar um momento/evento REAL do roteiro fornecido abaixo (na ordem cronologica)
+2. NAO invente eventos que nao estao no roteiro - use APENAS o conteudo real
+3. NAO repita eventos ja descritos em trechos anteriores (continue da cena ${accumulatedScenes + 1})
+4. Distribua as ${chunkMaxScenes} cenas uniformemente ao longo deste trecho completo
+5. Cada cena deve cobrir aproximadamente ${Math.floor(currentChunk.wordCount / chunkMaxScenes)}-${Math.ceil(currentChunk.wordCount / chunkMaxScenes)} palavras do roteiro
+6. Cubra TODO o conteudo deste trecho, do inicio ao fim, sem pular partes
+
+âš ï¸âš ï¸âš ï¸ REGRA CRÃTICA OBRIGATÃ“RIA - TAMANHO DO PROMPT:
+- O prompt_text DEVE ter entre ${minPromptChars} e ${maxPromptChars} caracteres (nÃ£o mais, nÃ£o menos)
+- Verifique o tamanho de CADA prompt_text antes de responder
+- Se um prompt estiver muito longo, reduza detalhes desnecessÃ¡rios mantendo a essÃªncia
+- Se estiver muito curto, adicione mais detalhes visuais relevantes
+- Esta regra Ã© OBRIGATÃ“RIA e deve ser respeitada para TODAS as ${chunkMaxScenes} cenas
+
+FORMATO OBRIGATORIO:
+- scene_description: 1 frase em PT-BR (${maxDescWords} palavras) descrevendo O QUE acontece nesta parte do roteiro
+- prompt_text: prompt em INGLES (${targetPromptWords} palavras = ${minPromptChars}-${maxPromptChars} caracteres) otimizado para '${imageModel}'${concisenessNote}
+- original_text: trecho EXATO do roteiro que esta cena representa
+
+âš ï¸ CRITICO - TAMANHO DO PROMPT_TEXT:
+- O prompt_text DEVE ter entre ${minPromptChars}-${maxPromptChars} caracteres (~${targetPromptWords} palavras em ingles)
+- Equilibrio ideal: riqueza visual + consistencia de personagem + foco da cena + seguranca de tokens
+- Inclua: composicao, iluminacao, estilo visual, personagens (se houver), acao/emocao, atmosfera
+- Evite: repeticoes, palavras vazias, excesso de adjetivos, detalhes irrelevantes
+- Exemplo de estrutura: "[Subject/Character] [Action/Pose] [Setting/Background] [Lighting/Mood] [Style/Quality] [Camera Angle]"
+
+${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON array valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]
+- O JSON deve ser valido e completo, sem cortes
+
+TRECHO FOCAL:
+"""${window.removeAccents(currentChunk.text)}"""`;
+
+                                    console.log(`ðŸŽ¯ Chunk ${chunkIndex + 1}: modelo="${chunkModel}", ${chunkMaxScenes} cenas Ã— ${tokensPerScene} tokens/cena = ${calculatedTokens} tokens (usando: ${chunkMaxOutputTokens})`);
+
+                                    // ETAPA 1: Preparando requisiÃ§Ã£o
+                                    updateStageProgress(0.05);
+                                    window.appState.sceneGenStatus.message = `ðŸ“¦ Preparando parte ${chunkIndex + 1}/${sceneProcessingQueue.length}`;
+                                    window.appState.sceneGenStatus.subMessage = `Montando requisiÃ§Ã£o para gerar ${chunkMaxScenes} cena(s)...`;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    await new Promise(resolve => setTimeout(resolve, 200)); // Pequeno delay para UI atualizar
+                                    
+                                    console.log(`ðŸ“¤ Enviando chunk ${chunkIndex + 1} para API: modelo="${chunkModel}"`);
+                                    
+                                    // ETAPA 2: Enviando para API
+                                    updateStageProgress(0.15);
+                                    window.appState.sceneGenStatus.message = `ðŸ“¤ Enviando parte ${chunkIndex + 1}/${sceneProcessingQueue.length} para IA`;
+                                    window.appState.sceneGenStatus.subMessage = `Aguardando IA processar ${currentChunk.wordCount} palavras...`;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    await new Promise(resolve => setTimeout(resolve, 200)); // Pequeno delay para UI atualizar
+                                    
+                                    // CRIAR SIMULADOR DE PROGRESSO para o chunk
+                                    let chunkProgressSimulator = null;
+                                    let chunkProgressCancelled = false;
+                                    const simulateChunkProgress = () => {
+                                        const progressSteps = [
+                                            { fraction: 0.2, delay: 400, msg: `ðŸ“¡ Conectando com IA (parte ${chunkIndex + 1})`, sub: `Enviando ${currentChunk.wordCount} palavras...` },
+                                            { fraction: 0.3, delay: 600, msg: `ðŸ§  IA analisando parte ${chunkIndex + 1}`, sub: `Identificando ${chunkMaxScenes} cena(s) neste trecho...` },
+                                            { fraction: 0.4, delay: 800, msg: `âš™ï¸ IA processando cenas`, sub: `Gerando descriÃ§Ãµes para parte ${chunkIndex + 1}...` },
+                                            { fraction: 0.55, delay: 700, msg: `âœï¸ IA escrevendo prompts`, sub: `Otimizando ${chunkMaxScenes} prompts em inglÃªs...` },
+                                            { fraction: 0.65, delay: 600, msg: `ðŸŽ¨ IA refinando detalhes`, sub: `Ajustando composiÃ§Ã£o visual...` }
+                                        ];
+                                        
+                                        let stepIndex = 0;
+                                        const runNextStep = () => {
+                                            if (chunkProgressCancelled || stepIndex >= progressSteps.length) return;
+                                            
+                                            const step = progressSteps[stepIndex];
+                                            updateStageProgress(step.fraction);
+                                            window.appState.sceneGenStatus.message = step.msg;
+                                            window.appState.sceneGenStatus.subMessage = step.sub;
+                                            window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                            stepIndex++;
+                                            
+                                            if (stepIndex < progressSteps.length) {
+                                                chunkProgressSimulator = setTimeout(runNextStep, step.delay);
+                                            }
+                                        };
+                                        
+                                        runNextStep();
+                                    };
+                                    
+                                    // Iniciar simulaÃ§Ã£o de progresso para o chunk
+                                    simulateChunkProgress();
+                                    
+                                    // Fazer a chamada da API
+                                    const chunkResult = await window.apiRequestWithFallback('/api/generate-legacy', 'POST', { 
+                                        prompt: chunkPrompt, 
+                                        model: chunkModel, 
+                                        schema: chunkSchema,
+                                        maxOutputTokens: chunkMaxOutputTokens
+                                    }, 2); // 2 retries = 3 tentativas totais
+                                    
+                                    // Cancelar simulaÃ§Ã£o quando a resposta chegar
+                                    chunkProgressCancelled = true;
+                                    if (chunkProgressSimulator) clearTimeout(chunkProgressSimulator);
+                                    
+                                    // Determinar qual modelo foi realmente usado (pode ter mudado no fallback)
+                                    const actualChunkModel = chunkResult.apiSource?.includes('OpenAI') || chunkResult.apiSource?.includes('gpt') 
+                                        ? 'gpt-4o' // Se veio do OpenAI, Ã© GPT
+                                        : chunkModel; // Caso contrÃ¡rio, usa o modelo original
+                                    
+                                    // ETAPA 4: Recebido da API
+                                    console.log(`âœ… Chunk ${chunkIndex + 1} recebido da API para modelo "${actualChunkModel}" (apiSource: ${chunkResult.apiSource || 'N/A'})`);
+                                    updateStageProgress(0.5);
+                                    window.appState.sceneGenStatus.message = `âœ… Parte ${chunkIndex + 1}/${sceneProcessingQueue.length} recebida`;
+                                    window.appState.sceneGenStatus.subMessage = `Validando ${chunkMaxScenes} cena(s)...`;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    await new Promise(resolve => setTimeout(resolve, 200)); // Pequeno delay para UI atualizar
+
+                                    // Processar resposta baseado no modelo REAL usado (nÃ£o o original)
+                                    if (actualChunkModel.startsWith('gpt-') || chunkResult.apiSource?.includes('OpenAI')) {
+                                        // GPT retorna: { data: { scenes: [...] } } ou { data: [...] }
+                                        chunkScenes = chunkResult.data?.scenes || chunkResult.data?.data?.scenes;
+                                        // Se nÃ£o encontrou em scenes, tenta como array direto
+                                        if (!chunkScenes && Array.isArray(chunkResult.data)) {
+                                            chunkScenes = chunkResult.data;
+                                        }
+                                    } else {
+                                        // Gemini retorna: { data: [...] } diretamente
+                                        if (Array.isArray(chunkResult.data)) {
+                                            chunkScenes = chunkResult.data;
+                                        } else if (chunkResult.data?.scenes && Array.isArray(chunkResult.data.scenes)) {
+                                            chunkScenes = chunkResult.data.scenes;
+                                        } else if (chunkResult.data?.data && Array.isArray(chunkResult.data.data)) {
+                                            chunkScenes = chunkResult.data.data;
+                                        } else {
+                                            chunkScenes = chunkResult.data;
+                                        }
+                                    }
+
+                                    // Debug: verificar se a resposta estÃ¡ vazia
+                                    if (!chunkResult.data || (typeof chunkResult.data === 'object' && Object.keys(chunkResult.data).length === 0)) {
+                                        console.error(`âŒ Resposta vazia recebida no chunk ${chunkIndex + 1}. apiSource: ${chunkResult.apiSource || 'N/A'}, data:`, chunkResult.data);
+                                        throw new Error(`Resposta vazia da API para chunk ${chunkIndex + 1} (modelo: ${actualChunkModel}). Tente novamente ou use outro modelo.`);
+                                    }
+                                    
+                                    if (!Array.isArray(chunkScenes) || chunkScenes.length === 0) {
+                                        console.error(`âŒ Chunk ${chunkIndex + 1}: Resposta nÃ£o Ã© um array vÃ¡lido. apiSource: ${chunkResult.apiSource || 'N/A'}, data:`, chunkResult.data);
+                                        throw new Error("A IA nao retornou prompts de cena validos para este trecho.");
+                                    }
+
+                                    const validScenes = chunkScenes.filter(scene =>
+                                        scene &&
+                                        (scene.prompt_text || scene.prompt) &&
+                                        typeof (scene.prompt_text || scene.prompt) === 'string'
+                                    );
+
+                                    if (!validScenes.length) {
+                                        throw new Error("As cenas retornadas nao possuem estrutura valida.");
+                                    }
+
+                                    const normalized = validScenes.map((scene, localIndex) => ({
+                                        scene_description: scene.scene_description || scene.description || `Cena ${accumulatedScenes + localIndex + 1}`,
+                                        prompt_text: scene.prompt_text || scene.prompt || '',
+                                        original_text: scene.original_text || scene.original || scene.text || currentChunk.text
+                                    }));
+
+                                    // ValidaÃ§Ã£o CRÃTICA (OBRIGATÃ“RIA): TODOS os prompts devem ter atÃ© 1200 caracteres (mÃ­nimo 600)
+                                    // PRIMEIRO: Truncar prompts que ultrapassam 1200 caracteres
+                                    normalized = normalized.map((scene, idx) => {
+                                        if (scene.prompt_text && scene.prompt_text.length > maxPromptChars) {
+                                            console.warn(`âš ï¸ Cena ${accumulatedScenes + idx + 1}: prompt com ${scene.prompt_text.length} caracteres, truncando para ${maxPromptChars}`);
+                                            let truncated = scene.prompt_text.substring(0, maxPromptChars);
+                                            const lastSpace = truncated.lastIndexOf(' ');
+                                            if (lastSpace > maxPromptChars - 50) {
+                                                truncated = truncated.substring(0, lastSpace);
+                                            }
+                                            scene.prompt_text = truncated.trim();
+                                        }
+                                        return scene;
+                                    });
+                                    
+                                    let promptSizeIssues = 0;
+                                    const sizeErrorDetails = [];
+                                    normalized.forEach((scene, idx) => {
+                                        const promptLength = scene.prompt_text.length;
+                                        if (promptLength < minPromptChars) {
+                                            promptSizeIssues++;
+                                            sizeErrorDetails.push(`Cena ${accumulatedScenes + idx + 1}: ${promptLength} caracteres (mÃ­nimo: ${minPromptChars})`);
+                                        }
+                                    });
+                                    
+                                    if (promptSizeIssues > 0) {
+                                        const errorMsg = `SIZE_VALIDATION_FAILED | ${promptSizeIssues}/${normalized.length} prompts fora do limite (${minPromptChars}-${maxPromptChars}). Detalhes: ${sizeErrorDetails.join(' | ')}`;
+                                        console.error(`âŒ ${errorMsg}`);
+                                        throw new Error(errorMsg);
+                                    }
+                                    
+                                    console.log(`âœ… Chunk ${chunkIndex + 1}: Todos os ${normalized.length} prompts estÃ£o dentro do tamanho ideal (600-1200 caracteres)`);
+
+                                    // VALIDAÃ‡ÃƒO CRÃTICA: Verificar se recebeu quantidade aceitÃ¡vel
+                                    const receivedPercent = (normalized.length / chunkMaxScenes) * 100;
+                                    
+                                    if (normalized.length !== chunkMaxScenes) {
+                                        console.warn(`âš ï¸ Chunk ${chunkIndex + 1}: Esperado ${chunkMaxScenes} cenas, recebido ${normalized.length} cenas (${receivedPercent.toFixed(0)}%)`);
+                                        
+                                        // CRÃTICO: Se recebeu MENOS de 50%, Ã© resultado muito incompleto - REJEITAR
+                                        if (receivedPercent < 50 && retries > 0) {
+                                            retries--;
+                                            console.error(`âŒ CRÃTICO: Recebeu apenas ${receivedPercent.toFixed(0)}% das cenas esperadas (${normalized.length}/${chunkMaxScenes})`);
+                                            console.error(`   Isso indica MAX_TOKENS ou resposta cortada. Aumentando tokens e tentando novamente...`);
+                                            window.addToLog(`âš ï¸ Chunk ${chunkIndex + 1}: Recebeu apenas ${normalized.length}/${chunkMaxScenes} cenas. Tentando novamente com mais tokens...`, true);
+                                            
+                                            // Aumentar tokens para prÃ³xima tentativa (50% a mais)
+                                            chunkMaxOutputTokens = Math.min(chunkModelMaxTokens, Math.floor(chunkMaxOutputTokens * 1.5));
+                                            console.log(`   ðŸ”§ Aumentando maxOutputTokens para: ${chunkMaxOutputTokens} (limite do modelo: ${chunkModelMaxTokens})`);
+                                            
+                                            await new Promise(resolve => setTimeout(resolve, 2000));
+                                            continue; // Tenta novamente com mais tokens
+                                        }
+                                        
+                                        // Se recebeu 50-99%, tentar novamente se tiver retries
+                                        if (normalized.length < chunkMaxScenes && retries > 1) {
+                                            retries--;
+                                            console.log(`ðŸ”„ Tentando novamente para obter exatamente ${chunkMaxScenes} cenas (${retries} tentativas restantes)...`);
+                                            await new Promise(resolve => setTimeout(resolve, 1500));
+                                            continue; // Tenta novamente
+                                        }
+
+                                        if (normalized.length !== chunkMaxScenes) {
+                                            throw new Error(`SCENE_COUNT_MISMATCH:${normalized.length}/${chunkMaxScenes}`);
+                                        }
+                                    }
+
+                                    // ETAPA 5: Adicionando cenas ao resultado GRADUALMENTE (uma por uma)
+                                    updateStageProgress(0.7);
+                                    window.appState.sceneGenStatus.message = `ðŸ’¾ Salvando parte ${chunkIndex + 1}/${chunkedSegments.length}`;
+                                    window.appState.sceneGenStatus.subMessage = `Adicionando ${normalized.length} cena(s) ao resultado...`;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    
+                                    // Adicionar cenas UMA POR UMA para atualizaÃ§Ã£o gradual do progresso
+                                    for (let sceneIdx = 0; sceneIdx < normalized.length; sceneIdx++) {
+                                        window.scenePromptResults.data.push(normalized[sceneIdx]);
+                                        accumulatedScenes++;
+                                    window.appState.sceneGenStatus.current = Math.min(exactSceneCount, accumulatedScenes);
+                                    
+                                        // Atualizar progresso a cada cena adicionada
+                                        const currentPercent = Math.round((window.appState.sceneGenStatus.current / window.appState.sceneGenStatus.total) * 100);
+                                        window.appState.sceneGenStatus.message = `ðŸ’¾ Salvando cenas`;
+                                        window.appState.sceneGenStatus.subMessage = `Cena ${window.appState.sceneGenStatus.current}/${window.appState.sceneGenStatus.total} adicionada (${currentPercent}%)`;
+                                        window.appState.sceneGenStatus.stageProgress = currentPercent;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                        
+                                        // Pequeno delay para visualizaÃ§Ã£o gradual
+                                        await new Promise(resolve => setTimeout(resolve, 150));
+                                    }
+                                    
+                                    console.log(`âœ… Chunk ${chunkIndex + 1}: ${normalized.length} cenas adicionadas (total acumulado: ${accumulatedScenes}/${exactSceneCount})`);
+                                    
+                                    // Garantir que nÃ£o ultrapasse a quantidade exata calculada
+                                    if (window.scenePromptResults.data.length > exactSceneCount) {
+                                        console.warn(`âš ï¸ Cortando excesso: ${window.scenePromptResults.data.length} â†’ ${exactSceneCount} cenas`);
+                                        window.scenePromptResults.data = window.scenePromptResults.data.slice(0, exactSceneCount);
+                                        accumulatedScenes = exactSceneCount;
+                                        window.appState.sceneGenStatus.current = exactSceneCount;
+                                    }
+                                    
+                                    // ETAPA 6: Parte concluÃ­da - mostrar progresso final da parte
+                                    const progressPercent = Math.round((window.appState.sceneGenStatus.current / window.appState.sceneGenStatus.total) * 100);
+                                    window.appState.sceneGenStatus.message = `âœ… Parte ${chunkIndex + 1}/${chunkedSegments.length} concluÃ­da!`;
+                                    window.appState.sceneGenStatus.subMessage = `âœ… ${window.appState.sceneGenStatus.current}/${window.appState.sceneGenStatus.total} cenas geradas (${progressPercent}%)`;
+                                    window.appState.sceneGenStatus.stageProgress = progressPercent;
+                                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                                    
+                                    // Delay maior para usuÃ¡rio VER o progresso atualizar
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+                                    
+                                    break;
+                                } catch (chunkError) {
+                                    const isSizeValidationError = chunkError.message?.includes('SIZE_VALIDATION_FAILED');
+                                    const isSceneCountMismatch = chunkError.message?.startsWith('SCENE_COUNT_MISMATCH');
+                                    const isModelCapacityError = chunkError.message && chunkError.message.startsWith('MODEL_CAPACITY_EXCEEDED');
+                                    const isMaxTokensError = chunkError.message && (
+                                        chunkError.message.includes('MAX_TOKENS') ||
+                                        chunkError.message.includes('maxOutputTokens') ||
+                                        chunkError.message.includes('limite de tokens') ||
+                                        chunkError.message.includes('vazia ou malformada')
+                                    );
+                                    
+                                    const isJsonError = chunkError.message && (
+                                        chunkError.message.includes('JSON') ||
+                                        chunkError.message.includes('malformado') ||
+                                        chunkError.message.includes('incompleto') ||
+                                        chunkError.message.includes('parse') ||
+                                        chunkError.message.includes('Unexpected')
+                                    );
+
+                                    if (isSizeValidationError) {
+                                        if (retries > 0) {
+                                            retries--;
+                                            const details = chunkError.message.split('Detalhes:')[1] || '';
+                                            console.error(`âŒ Tamanho invÃ¡lido detectado: ${details}`);
+                                            window.addToLog(`âš ï¸ Chunk ${chunkIndex + 1}: IA nÃ£o respeitou o limite de 600-1200 caracteres.${details ? ` (${details.trim()})` : ''} Tentando novamente...`, true);
+                                            chunkPrompt += `\n\nâš ï¸âš ï¸âš ï¸ REGRA OBRIGATÃ“RIA: Cada prompt_text deve conter entre ${minPromptChars} e ${maxPromptChars} caracteres. Verifique cada prompt e ajuste antes de responder.`;                                            
+                                            await new Promise(resolve => setTimeout(resolve, 2000));
+                                            continue;
+                                        }
+                                        throw chunkError;
+                                    }
+
+                                    if (isModelCapacityError) {
+                                        window.addToLog(`âŒ O modelo ${chunkModel} nÃ£o suporta o tamanho necessÃ¡rio (${calculatedTokens}/${chunkModelMaxTokens} tokens). Divida o roteiro em partes menores ou use um modelo com maior limite.`, true);
+                                        throw chunkError;
+                                    }
+
+                                    if (isSceneCountMismatch && retries > 0) {
+                                        retries--;
+                                        const mismatchInfo = chunkError.message.split(':')[1] || '';
+                                        console.warn(`âš ï¸ Quantidade incorreta de cenas retornadas (${mismatchInfo}). ReforÃ§ando instruÃ§Ãµes e tentando novamente...`);
+                                        if (chunkMaxOutputTokens >= chunkModelMaxTokens && chunkModel !== window.RECOMMENDED_MODEL || "gpt-4o") {
+                                            window.addToLog(`âš ï¸ Chunk ${chunkIndex + 1}: IA nÃ£o retornou todas as cenas e o modelo ${chunkModel} estÃ¡ no limite. Alternando para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`, true);
+                                            chunkModel = window.RECOMMENDED_MODEL || "gpt-4o";
+                                            model = chunkModel;
+                                            refreshModelParams();
+                                            assignModelParameters();
+                                        } else {
+                                            chunkMaxOutputTokens = Math.min(chunkModelMaxTokens, Math.floor(chunkMaxOutputTokens * 1.4));
+                                        }
+                                        chunkPrompt += `\n\nâš ï¸âš ï¸âš ï¸ VOCÃŠ DEVE retornar exatamente ${chunkMaxScenes} cenas para esta parte. Conte e verifique antes de responder.`;
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                        continue;
+                                    } else if (isSceneCountMismatch) {
+                                        throw chunkError;
+                                    }
+
+                                    if (isMaxTokensError && retries > 0) {
+                                        retries--;
+                                        if (chunkMaxOutputTokens >= chunkModelMaxTokens && chunkModel !== window.RECOMMENDED_MODEL || "gpt-4o") {
+                                            window.addToLog(`âš ï¸ Chunk ${chunkIndex + 1}: Mesmo apÃ³s aumento, ${chunkModel} atingiu o limite de tokens. Alternando para ${window.RECOMMENDED_MODEL || "gpt-4o"}.`, true);
+                                            chunkModel = window.RECOMMENDED_MODEL || "gpt-4o";
+                                            model = chunkModel;
+                                            refreshModelParams();
+                                            assignModelParameters();
+                                            console.warn(`ðŸ”„ Fallback apÃ³s MAX_TOKENS: novo modelo "${chunkModel}" com limite ${chunkModelMaxTokens}.`);
+                                        } else {
+                                            chunkMaxOutputTokens = Math.min(chunkModelMaxTokens, Math.floor(chunkMaxOutputTokens * 1.5));
+                                            console.warn(`âš ï¸ MAX_TOKENS detectado. Aumentando maxOutputTokens para ${chunkMaxOutputTokens} e tentando novamente (tentativas restantes: ${retries}).`);
+                                        }
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                        continue;
+                                    } else if (isJsonError && retries > 0) {
+                                        // Erro de JSON - tentar novamente com prompt mais explÃ­cito
+                                        window.addToLog(`Parte ${chunkIndex + 1}: erro de JSON detectado. Tentando novamente com instruÃ§Ãµes mais explÃ­citas... (${retries} restante)`, true);
+                                        
+                                        // Adicionar instruÃ§Ã£o ainda mais explÃ­cita no retry
+                                        chunkPrompt = `${chunkPrompt}\n\nLEMBRE-SE: Retorne APENAS o JSON array, sem nenhum texto adicional. O JSON deve comeÃ§ar com [ e terminar com ]. Todas as strings entre aspas duplas.`;
+                                        
+                                        retries--;
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                        continue; // Tenta novamente com o prompt melhorado
+                                    } else {
+                                        retries--;
+                                        if (retries === 0) {
+                                            throw new Error(`Falha ao gerar cenas para a parte ${chunkIndex + 1}: ${chunkError.message}`);
+                                        }
+                                        window.addToLog(`Parte ${chunkIndex + 1}: erro (${chunkError.message}). Tentando novamente... (${retries} restante)`, true);
+                                        await new Promise(resolve => setTimeout(resolve, 2000));
+                                    }
+                                }
+                            }
+
+                            // NÃ£o precisa mais desse delay - jÃ¡ temos delays mais longos dentro do loop
+                        }
+
+                        // VALIDAÃ‡ÃƒO FINAL - Garantir quantidade EXATA
+                        const generated = window.scenePromptResults.data.length;
+                        
+                        if (generated !== exactSceneCount) {
+                            const mismatchInfo = `${generated}/${exactSceneCount}`;
+                            console.error(`âŒ ERRO: Quantidade final incorreta (${mismatchInfo}). Abortando geraÃ§Ã£o.`);
+                            throw new Error(`SCENE_TOTAL_MISMATCH:${mismatchInfo}`);
+                        }
+
+                        console.log(`âœ… PERFEITO: Geradas exatamente ${generated} cenas conforme calculado!`);
+                        window.addToLog(`âœ… Quantidade exata atingida: ${generated} prompts de cena gerados`, false);
+                        
+                        window.scenePromptResults.total_prompts = window.scenePromptResults.data.length;
+                        window.appState.sceneGenStatus.current = window.scenePromptResults.data.length;
+                        window.appState.sceneGenStatus.total = exactSceneCount;
+                        window.appState.sceneGenStatus.chunkCurrent = chunkedSegments.length;
+                        window.appState.sceneGenStatus.subMessage = generated === exactSceneCount 
+                            ? `âœ… ${generated} cenas geradas com sucesso!`
+                            : `${generated}/${exactSceneCount} cenas (${generated < exactSceneCount ? 'faltam ' + (exactSceneCount - generated) : 'excesso de ' + (generated - exactSceneCount)})`;
+                        window.appState.sceneGenStatus.message = `Processamento concluÃ­do: ${window.scenePromptResults.data.length} cena(s).`;
+                        window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                    } else {
+                    let schema;
+                    let prompt;
+                    if (model.startsWith('gpt-')) {
+                        // Limites ideais para prompts (600-1200 caracteres)
+                        const minPromptChars = 600;
+                        const maxPromptChars = 1200;
+                        
+                        const strictRulesObject = `
+âš ï¸ CRITICO - CONTAGEM EXATA:
+- VocÃª deve gerar EXATAMENTE ${exactSceneCount} cenas.
+- Gere exatamente ${exactSceneCount} itens dentro do campo "scenes".
+- Cada elemento deve ter scene_description iniciando com "Cena X:" (onde X Ã© o nÃºmero da cena).
+- NÃ£o pule nÃºmeros, nÃ£o repita nÃºmeros, nÃ£o combine duas cenas em um Ãºnico item.
+- Se perceber que irÃ¡ gerar quantidade incorreta, RECONSTRUA a resposta antes de enviar.
+`;
+
+                        schema = {
+                            type: "OBJECT",
+                            properties: {
+                                scenes: {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            scene_description: { type: "STRING" },
+                                            prompt_text: { type: "STRING" },
+                                            original_text: { type: "STRING" }
+                                        },
+                                        required: ["scene_description", "prompt_text", "original_text"]
+                                    }
+                                }
+                            },
+                            required: ["scenes"]
+                        };
+                            prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+${strictRulesObject}
+
+âš ï¸âš ï¸âš ï¸ REGRA CRÃTICA OBRIGATÃ“RIA - TAMANHO DO PROMPT:
+- O prompt_text DEVE ter entre ${minPromptChars} e ${maxPromptChars} caracteres (nÃ£o mais, nÃ£o menos)
+- Verifique o tamanho de CADA prompt_text antes de responder
+- Se um prompt estiver muito longo, reduza detalhes desnecessÃ¡rios mantendo a essÃªncia
+- Se estiver muito curto, adicione mais detalhes visuais relevantes
+- Esta regra Ã© OBRIGATÃ“RIA e deve ser respeitada para TODAS as ${exactSceneCount} cenas
+- Equilibrio ideal: riqueza visual + consistencia de personagem + foco da cena + seguranca de tokens
+- Inclua: composicao, iluminacao, estilo visual, personagens (se houver), acao/emocao, atmosfera
+- Evite: repeticoes, palavras vazias, excesso de adjetivos, detalhes irrelevantes
+- Exemplo de estrutura: "[Subject/Character] [Action/Pose] [Setting/Background] [Lighting/Mood] [Style/Quality] [Camera Angle]"
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON objeto valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: {"scenes": [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]}
+- O JSON deve ser valido e completo, sem cortes
+
+ROTEIRO:
+"""${window.removeAccents(text)}"""`;
+                    } else {
+                        // Limites ideais para prompts (600-1200 caracteres)
+                        const minPromptChars = 600;
+                        const maxPromptChars = 1200;
+                        
+                        const strictRulesArray = `
+âš ï¸ CRITICO - CONTAGEM EXATA:
+- VocÃª deve gerar EXATAMENTE ${exactSceneCount} cenas.
+- Gere exatamente ${exactSceneCount} objetos no array JSON.
+- Cada objeto deve ter scene_description iniciando com "Cena X:" (onde X Ã© o nÃºmero da cena).
+- NÃ£o pule nÃºmeros, nÃ£o repita nÃºmeros, nÃ£o combine duas cenas em um Ãºnico item.
+- Se detectar que irÃ¡ gerar quantidade diferente, reconstrua a resposta antes de finalizar.
+`;
+
+                        schema = {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    scene_description: { type: "STRING" },
+                                    prompt_text: { type: "STRING" },
+                                    original_text: { type: "STRING" }
+                                },
+                                required: ["scene_description", "prompt_text", "original_text"]
+                            }
+                        };
+                            prompt = `Diretor de arte: Divida roteiro em cenas visuais logicas. ${autoSceneGuidance} Para cada cena, gere 1 prompt em INGLES otimizado para '${imageModel}'.${styleInstruction} ${textInstruction} ${characterInstruction} 
+
+${strictRulesArray}
+
+âš ï¸âš ï¸âš ï¸ REGRA CRÃTICA OBRIGATÃ“RIA - TAMANHO DO PROMPT:
+- O prompt_text DEVE ter entre ${minPromptChars} e ${maxPromptChars} caracteres (nÃ£o mais, nÃ£o menos)
+- Verifique o tamanho de CADA prompt_text antes de responder
+- Se um prompt estiver muito longo, reduza detalhes desnecessÃ¡rios mantendo a essÃªncia
+- Se estiver muito curto, adicione mais detalhes visuais relevantes
+- Esta regra Ã© OBRIGATÃ“RIA e deve ser respeitada para TODAS as ${exactSceneCount} cenas
+- Equilibrio ideal: riqueza visual + consistencia de personagem + foco da cena + seguranca de tokens
+- Inclua: composicao, iluminacao, estilo visual, personagens (se houver), acao/emocao, atmosfera
+- Evite: repeticoes, palavras vazias, excesso de adjetivos, detalhes irrelevantes
+- Exemplo de estrutura: "[Subject/Character] [Action/Pose] [Setting/Background] [Lighting/Mood] [Style/Quality] [Camera Angle]"
+
+CRITICO - FORMATO JSON OBRIGATORIO:
+- Responda APENAS com um JSON array valido e completo
+- Nao inclua texto antes ou depois do JSON
+- Nao use markdown code blocks (sem \`\`\`json)
+- Todas as strings devem estar entre aspas duplas
+- Nao use virgulas finais
+- Formato exato: [{"prompt_text": "...", "scene_description": "...", "original_text": "..."}]
+- O JSON deve ser valido e completo, sem cortes
+
+ROTEIRO:
+"""${window.removeAccents(text)}"""`;
+                        }
+
+                        let result;
+                        let scenesData;
+                        let retries = 3;
+
+                        // Calcular maxOutputTokens baseado na quantidade exata de cenas
+                        // Estimar tokens por cena de forma mais agressiva para evitar cortes
+                        const nonChunkModelLower = window.normalizeModelName(model);
+                        const tokensPerSceneEstimate = nonChunkModelLower.includes('gemini')
+                            ? 500 // prompts longos + JSON â†’ Gemini tende a precisar de mais tokens
+                            : nonChunkModelLower.includes('gpt-4')
+                                ? 450
+                                : 400;
+                        const tokensNeededForScenes = exactSceneCount * tokensPerSceneEstimate;
+                        const nonChunkedMaxTokens = Math.min(maxOutputTokens, Math.max(4096, tokensNeededForScenes + 1000)); // Margem de seguranÃ§a
+                        
+                        console.log(`ðŸ“Š RequisiÃ§Ã£o completa: ${exactSceneCount} cenas, ~${tokensNeededForScenes} tokens necessÃ¡rios (estimativa ${tokensPerSceneEstimate} tokens/cena), usando ${nonChunkedMaxTokens} tokens mÃ¡ximo`);
+
+                        const updateStageProgress = (progress, msg, subMsg) => {
+                            if (!window.appState.sceneGenStatus) return;
+                            const currentStage = window.appState.sceneGenStatus.stageProgress || 0;
+                            window.appState.sceneGenStatus.stageProgress = Math.max(currentStage, progress);
+                            if (msg) window.appState.sceneGenStatus.message = msg;
+                            if (subMsg !== undefined) window.appState.sceneGenStatus.subMessage = subMsg;
+                            window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                        };
+
+                        updateStageProgress(10, "ðŸ§  Analisando roteiro completo", `Identificando ${exactSceneCount} cena(s) ideais...`);
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                        updateStageProgress(18, "ðŸ“¦ Preparando requisiÃ§Ã£o para a IA", `Estimando tokens necessÃ¡rios (~${tokensNeededForScenes})...`);
+                        await new Promise(resolve => setTimeout(resolve, 150));
+                        
+                        while (retries > 0) {
+                            try {
+                                updateStageProgress(30, "ðŸ“¤ Enviando requisiÃ§Ã£o completa para a IA", `Modelo selecionado: ${model}`);
+                                console.log(`ðŸ“¤ Enviando requisiÃ§Ã£o completa para API: modelo="${model}"`);
+                                
+                                // Criar simulador de progresso em tempo real durante a chamada da API
+                                let progressSimulator = null;
+                                let progressCancelled = false;
+                                const simulateProgress = () => {
+                                    let currentProgress = 30;
+                                    const progressSteps = [
+                                        { progress: 35, delay: 500, msg: "ðŸ“¡ ConexÃ£o estabelecida com a IA", sub: "Enviando roteiro completo..." },
+                                        { progress: 42, delay: 800, msg: "ðŸ§  IA analisando roteiro", sub: `Identificando ${exactSceneCount} momentos-chave...` },
+                                        { progress: 50, delay: 1000, msg: "âš™ï¸ IA processando cena por cena", sub: "Gerando descriÃ§Ãµes visuais..." },
+                                        { progress: 60, delay: 1200, msg: "âœï¸ IA escrevendo prompts em inglÃªs", sub: "Otimizando para geraÃ§Ã£o de imagens..." },
+                                        { progress: 70, delay: 1000, msg: "ðŸŽ¨ IA refinando detalhes visuais", sub: "Garantindo coerÃªncia narrativa..." },
+                                        { progress: 78, delay: 800, msg: "ðŸ” IA verificando qualidade", sub: "Validando todos os prompts..." },
+                                        { progress: 85, delay: 1000, msg: "ðŸ“¦ IA finalizando resposta", sub: "Preparando envio dos prompts..." }
+                                    ];
+                                    
+                                    let stepIndex = 0;
+                                    const runNextStep = () => {
+                                        if (progressCancelled || stepIndex >= progressSteps.length) return;
+                                        
+                                        const step = progressSteps[stepIndex];
+                                        updateStageProgress(step.progress, step.msg, step.sub);
+                                        stepIndex++;
+                                        
+                                        if (stepIndex < progressSteps.length) {
+                                            progressSimulator = setTimeout(runNextStep, step.delay);
+                                        }
+                                    };
+                                    
+                                    runNextStep();
+                                };
+                                
+                                // Iniciar simulaÃ§Ã£o de progresso
+                                simulateProgress();
+                                
+                                // Fazer a chamada da API
+                                result = await window.apiRequestWithFallback('/api/generate-legacy', 'POST', { 
+                                    prompt, 
+                                    model, 
+                                    schema,
+                                    maxOutputTokens: nonChunkedMaxTokens
+                                });
+                                
+                                // Cancelar simulaÃ§Ã£o quando a resposta chegar
+                                progressCancelled = true;
+                                if (progressSimulator) clearTimeout(progressSimulator);
+                                
+                                // Atualizar para 90% quando receber a resposta
+                                updateStageProgress(90, "âœ… Resposta recebida da IA", `Validando ${exactSceneCount} cena(s)...`);
+                                
+                                // Determinar qual modelo foi realmente usado (pode ter mudado no fallback)
+                                const actualModel = result.apiSource?.includes('OpenAI') || result.apiSource?.includes('gpt') 
+                                    ? 'gpt-4o' // Se veio do OpenAI, Ã© GPT
+                                    : model; // Caso contrÃ¡rio, usa o modelo original
+                                
+                                console.log(`âœ… Resposta completa recebida da API para modelo "${actualModel}" (apiSource: ${result.apiSource || 'N/A'})`);
+                                
+                                // Processar resposta baseado no modelo REAL usado (nÃ£o o original)
+                                if (actualModel.startsWith('gpt-') || result.apiSource?.includes('OpenAI')) {
+                                    // GPT retorna: { data: { scenes: [...] } } ou { data: [...] }
+                                    scenesData = result.data?.scenes || result.data?.data?.scenes;
+                                    // Se nÃ£o encontrou em scenes, tenta como array direto
+                                    if (!scenesData && Array.isArray(result.data)) {
+                                        scenesData = result.data;
+                                    }
+                                } else {
+                                    // Gemini retorna: { data: [...] } diretamente
+                                    if (Array.isArray(result.data)) {
+                                        scenesData = result.data;
+                                    } else if (result.data?.scenes && Array.isArray(result.data.scenes)) {
+                                        scenesData = result.data.scenes;
+                                    } else if (result.data?.data && Array.isArray(result.data.data)) {
+                                        scenesData = result.data.data;
+                                    } else {
+                                        scenesData = result.data;
+                                    }
+                                }
+                                
+                                // Debug: verificar se a resposta estÃ¡ vazia
+                                if (!result.data || (typeof result.data === 'object' && Object.keys(result.data).length === 0)) {
+                                    console.error(`âŒ Resposta vazia recebida. apiSource: ${result.apiSource || 'N/A'}, data:`, result.data);
+                                    throw new Error(`Resposta vazia da API (modelo: ${actualModel}). Tente novamente ou use outro modelo.`);
+                                }
+                                
+                                if (Array.isArray(scenesData) && scenesData.length > 0) {
+                                    const validScenes = scenesData.filter(scene => 
+                                        scene && 
+                                        (scene.prompt_text || scene.prompt) &&
+                                        typeof (scene.prompt_text || scene.prompt) === 'string'
+                                    );
+                                    
+                                    if (validScenes.length > 0) {
+                                        scenesData = validScenes.map(scene => ({
+                                            scene_description: scene.scene_description || scene.description || `Cena ${scenesData.indexOf(scene) + 1}`,
+                                            prompt_text: scene.prompt_text || scene.prompt || '',
+                                            original_text: scene.original_text || scene.original || scene.text || ''
+                                        }));
+                                        
+                                        // Validar e truncar tamanho dos prompts (mÃ¡ximo 1200 caracteres)
+                                        const minPromptChars = 600;
+                                        const maxPromptChars = 1200;
+                                        let promptSizeIssues = 0;
+                                        
+                                        scenesData.forEach((scene, idx) => {
+                                            // PRIMEIRO: Truncar se ultrapassar 1200 caracteres
+                                            if (scene.prompt_text && scene.prompt_text.length > maxPromptChars) {
+                                                console.warn(`âš ï¸ Cena ${idx + 1}: prompt com ${scene.prompt_text.length} caracteres, truncando para ${maxPromptChars}`);
+                                                let truncated = scene.prompt_text.substring(0, maxPromptChars);
+                                                const lastSpace = truncated.lastIndexOf(' ');
+                                                if (lastSpace > maxPromptChars - 50) {
+                                                    truncated = truncated.substring(0, lastSpace);
+                                                }
+                                                scene.prompt_text = truncated.trim();
+                                            }
+                                            
+                                            const promptLength = scene.prompt_text.length;
+                                            if (promptLength < minPromptChars) {
+                                                promptSizeIssues++;
+                                                console.warn(`âš ï¸ Cena ${idx + 1}: prompt com apenas ${promptLength} caracteres (mÃ­nimo: ${minPromptChars})`);
+                                            }
+                                        });
+                                        
+                                        if (promptSizeIssues > 0) {
+                                            throw new Error(`SIZE_VALIDATION_FAILED::${promptSizeIssues}/${scenesData.length} prompts fora do limite de ${minPromptChars}-${maxPromptChars} caracteres.`);
+                                        }
+                                        
+                                        console.log(`âœ… Modo completo: Todos os ${scenesData.length} prompts estÃ£o dentro do tamanho ideal (600-1200 caracteres)`);
+                                        updateStageProgress(75, "âœ… Resposta recebida e validada", `${validScenes.length} cena(s) identificadas. Normalizando dados...`);
+                                        
+                                        break;
+                                    }
+                                }
+                                
+                                if (retries > 1) {
+                                    console.warn(`Tentativa ${4 - retries} falhou. Resposta recebida:`, result);
+                                    window.addToLog(`Tentando novamente... (${retries - 1} tentativas restantes)`, false);
+                                    updateStageProgress(Math.max(window.appState.sceneGenStatus.stageProgress || 0, 30), "ðŸ” Repetindo tentativa com ajustes", "Aguardando nova resposta da IA...");
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    retries--;
+                                } else {
+                                    throw new Error("A IA nao retornou prompts de cena validos no formato esperado.");
+                                }
+                            } catch (error) {
+                                if (error.message?.includes('SIZE_VALIDATION_FAILED')) {
+                                    retries--;
+                                    if (retries === 0) {
+                                        throw error;
+                                    }
+                                    window.addToLog(`âš ï¸ Prompt fora do limite de 600-1200 caracteres. Tentando novamente (${retries} restante)...`, true);
+                                    prompt += `\n\nâš ï¸âš ï¸âš ï¸ VOCÃŠ DEVE garantir que o prompt_text tenha entre 600 e 1200 caracteres. Ajuste antes de responder.`;
+                                    updateStageProgress(Math.max(window.appState.sceneGenStatus.stageProgress || 0, 35), "âš ï¸ Ajustando tamanho dos prompts", "Reenviando instruÃ§Ãµes mais rÃ­gidas...");
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    continue;
+                                }
+
+                        if (error.message?.startsWith('SCENE_COUNT_MISMATCH')) {
+                            const mismatchInfo = error.message.split(':')[1] || '';
+                            retries--;
+                            if (retries === 0) {
+                                throw new Error(`IA nao entregou a quantidade exata de cenas (${mismatchInfo || 'desconhecido'}) apÃ³s todas as tentativas.`);
+                            }
+                            window.addToLog(`âš ï¸ IA nÃ£o respeitou a quantidade exata (${mismatchInfo.trim()}). Regerando... (${retries} tentativa(s) restante(s))`, true);
+                            updateStageProgress(Math.max(window.appState.sceneGenStatus.stageProgress || 0, 40), "âš ï¸ Corrigindo quantidade de cenas", "Repetindo geraÃ§Ã£o com instruÃ§Ãµes reforÃ§adas...");
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                            continue;
+                        }
+
+                                const isJsonError = error.message && (
+                                    error.message.includes('JSON') ||
+                                    error.message.includes('malformado') ||
+                                    error.message.includes('incompleto') ||
+                                    error.message.includes('parse') ||
+                                    error.message.includes('Unexpected')
+                                );
+                                
+                                if (isJsonError && retries > 0) {
+                                    // Erro de JSON - adicionar instruÃ§Ã£o mais explÃ­cita no retry
+                                    window.addToLog(`Erro de JSON detectado. Tentando novamente com instruÃ§Ãµes mais explÃ­citas... (${retries} restante)`, true);
+                                    if (model.startsWith('gpt-')) {
+                                        prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON objeto vÃ¡lido, sem nenhum texto adicional. O JSON deve comeÃ§ar com { e terminar com }. Todas as strings entre aspas duplas.`;
+                                    } else {
+                                        prompt = `${prompt}\n\nLEMBRE-SE: Retorne APENAS o JSON array vÃ¡lido, sem nenhum texto adicional. O JSON deve comeÃ§ar com [ e terminar com ]. Todas as strings entre aspas duplas.`;
+                                    }
+                                    updateStageProgress(Math.max(window.appState.sceneGenStatus.stageProgress || 0, 35), "âš ï¸ Ajustando formato para JSON vÃ¡lido", "Refinando instruÃ§Ãµes e repetindo requisiÃ§Ã£o...");
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    continue;
+                                }
+                                
+                                retries--;
+                                if (retries === 0) {
+                                    console.error('Erro apÃ³s todas as tentativas:', error);
+                                    throw new Error(`Falha ao gerar prompts de cena apÃ³s 3 tentativas: ${error.message}`);
+                                }
+                                console.warn(`Erro na tentativa ${4 - retries}:`, error.message);
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                            }
+                        }
+                        
+                        if (!scenesData || !Array.isArray(scenesData) || scenesData.length === 0) {
+                            throw new Error("A IA nao retornou prompts de cena validos.");
+                        }
+                        
+                        // Garantir que temos exatamente a quantidade calculada
+                        if (scenesData.length !== exactSceneCount) {
+                            console.warn(`âš ï¸ Contagem incorreta: recebeu ${scenesData.length} cenas, esperado ${exactSceneCount}. ForÃ§ando nova tentativa...`);
+                            throw new Error(`SCENE_COUNT_MISMATCH:${scenesData.length}/${exactSceneCount}`);
+                        }
+                    
+                    window.scenePromptResults.data.push(...scenesData);
+                    window.scenePromptResults.total_prompts = window.scenePromptResults.data.length;
+                    window.appState.sceneGenStatus.current = window.scenePromptResults.data.length;
+                        window.appState.sceneGenStatus.total = exactSceneCount;
+                        window.appState.sceneGenStatus.subMessage = `Roteiro dividido automaticamente (${window.scenePromptResults.data.length}/${exactSceneCount} cenas).`;
+                        window.appState.sceneGenStatus.message = `Roteiro dividido em ${window.scenePromptResults.data.length} cena(s) (calculado: ${exactSceneCount}).`;
+                        updateStageProgress(90, window.appState.sceneGenStatus.message, window.appState.sceneGenStatus.subMessage);
+                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                    }
+                }
+
+                window.scenePromptResults.currentPage = 1;
+                window.appState.lastGeneratedPrompts = window.scenePromptResults.data.map(item => item.prompt_text || '').filter(Boolean).join('\n');
+                
+                // Save to history
+                const sceneTitle = document.getElementById('scene-text')?.value.trim().substring(0, 50) || 'Prompts de Cena';
+                window.saveSceneToHistory(scenePromptResults, sceneTitle);
+                window.renderSceneHistory();
+
+                if (window.appState.currentTab === 'scene-prompts') {
+                    window.renderScenePage();
+                }
+                
+                const endTime = Date.now();
+                const duration = Math.round((endTime - startTime) / 1000);
+                
+                // Atualizar para 100% ANTES de mostrar modal de conclusÃ£o
+                window.appState.sceneGenStatus.stageProgress = 100;
+                window.appState.sceneGenStatus.current = window.scenePromptResults.data.length;
+                window.appState.sceneGenStatus.total = window.scenePromptResults.data.length;
+                window.appState.sceneGenStatus.message = `âœ… ConcluÃ­do! ${window.scenePromptResults.data.length} prompts gerados`;
+                window.appState.sceneGenStatus.subMessage = `GeraÃ§Ã£o completa em ${duration}s`;
+                window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                
+                // Pequeno delay para o usuÃ¡rio VER o 100%
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                window.showSceneGenCompleteModal(duration);
+
+                window.appState.sceneGenStatus.message = `Concluido. ${window.scenePromptResults.data.length} prompts gerados.`;
+
+            } catch (error) {
+                console.error('Erro ao gerar prompts de cena:', error);
+                const errorMsg = error.message || "Erro ao gerar prompts de cena";
+                const isSizeError = errorMsg.includes('SIZE_VALIDATION_FAILED');
+                const isSceneMismatch = errorMsg.startsWith('SCENE_TOTAL_MISMATCH');
+                
+                if (isSceneMismatch) {
+                    window.addToLog('âŒ Falha ao gerar todas as cenas. O sistema nÃ£o conseguiu chegar Ã  quantidade exata. Tente novamente ou use um modelo mais poderoso.', true);
+                    window.appState.sceneGenStatus.message = 'Falha: quantidade de cenas gerada nÃ£o corresponde ao esperado.';
+                } else if (isSizeError) {
+                    window.addToLog('âŒ A IA nÃ£o respeitou o limite de 600-1200 caracteres por prompt. Tente novamente.', true);
+                    window.appState.sceneGenStatus.message = 'Erro: Limite de caracteres nÃ£o respeitado pela IA.';
+                } else {
+                    window.addToLog(errorMsg, true);
+                    window.appState.sceneGenStatus.message = errorMsg;
+                }
+                
+                window.appState.sceneGenStatus.error = true;
+                
+                // Tentar extrair informaÃ§Ãµes Ãºteis do erro
+                if (errorMsg.includes('JSON')) {
+                    window.addToLog("Erro de formataÃ§Ã£o JSON detectado. A resposta da IA pode estar malformada.", true);
+                    console.error('Detalhes do erro JSON:', error);
+                }
+            } finally {
+                window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                setTimeout(() => {
+                    window.appState.sceneGenStatus.active = false;
+                    window.renderSceneGenerationProgress(window.appState.sceneGenStatus);
+                }, 5000);
+            }
+        }

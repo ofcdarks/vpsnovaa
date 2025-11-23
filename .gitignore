@@ -1,0 +1,19 @@
+# Dependências do Node.js
+node_modules
+
+# Arquivos de log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+darkscript.db
+darkscript.db-shm
+darkscript.db-wal
+*.db
+*.sqlite
+
+# Arquivo de ambiente local (NUNCA deve ir para o repositório)
+.env
+
+# Arquivos de banco de dados SQLite
+*.db
+*.db-journal

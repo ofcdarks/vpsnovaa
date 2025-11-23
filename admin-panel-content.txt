@@ -1,0 +1,2769 @@
+﻿window.initializeAdminPanel = async function() {
+        const adminContainer = document.getElementById('admin-container');
+        if (!adminContainer) return;
+        
+        // Limpar widget do chat quando abrir painel admin
+        if (window.appState.currentUser && (window.appState.currentUser.role === 'admin' || window.appState.currentUser.role === 'attendant')) {
+            const chatWidgetContainer = document.getElementById('chat-widget-container');
+            const chatToggleBtn = document.getElementById('chat-widget-toggle');
+            if (chatWidgetContainer) {
+                chatWidgetContainer.classList.add('hidden');
+            }
+            if (chatToggleBtn) {
+                chatToggleBtn.style.display = 'block';
+            }
+            window.chatWidgetOpen = false;
+            window.currentConversationId = null;
+            
+            // Limpar mensagens do widget
+            const messagesContainer = document.getElementById('chat-messages');
+            if (messagesContainer) {
+                messagesContainer.innerHTML = '';
+            }
+        }
+    
+        let statsHtml = '';
+        try {
+            const stats = await window.apiRequest('/api/admin/stats', 'GET');
+            statsHtml = `
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                    <h3 class="text-lg font-semibold mb-4">Estatisticas da Aplicacao</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg text-center"><p class="text-sm text-gray-500 dark:text-gray-400">Total de Utilizadores</p><p class="text-2xl font-bold text-gray-900 dark:text-gray-100">${stats.totalUsers}</p></div>
+                        <div class="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg text-center"><p class="text-sm text-gray-500 dark:text-gray-400">Ativacao Pendente</p><p class="text-2xl font-bold text-yellow-600 dark:text-yellow-400">${stats.pendingActivation}</p></div>
+                        <div class="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg text-center"><p class="text-sm text-gray-500 dark:text-gray-400">Online Agora (15min)</p><p class="text-2xl font-bold text-green-600 dark:text-green-400">${stats.onlineNow}</p></div>
+                        <div class="bg-100 dark:bg-gray-700 p-3 rounded-lg text-center"><p class="text-sm text-gray-500 dark:text-gray-400">Logins (24h)</p><p class="text-2xl font-bold text-blue-600 dark:text-blue-400">${stats.loginsLast24h}</p></div>
+                    </div>
+                    <button id="approve-all-users-btn" class="w-full mt-4 py-2 px-4 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">Aprovar Todos os Utilizadores Pendentes</button>
+                </div>`;
+        } catch (error) {
+            window.addToLog(`Erro ao carregar estatisticas: ${error.message}`, true);
+            statsHtml = `<p class="text-red-500">Erro ao carregar estatisticas: ${error.message}</p>`;
+        }
+    
+        let appStatusHtml = '';
+        try {
+            const appStatus = await window.apiRequest('/api/status', 'GET');
+            appStatusHtml = `
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mt-6">
+                    <h3 class="text-lg font-semibold mb-4">Controle da Aplicacao</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="maintenance-toggle" class="flex items-center cursor-pointer">
+                                <div class="relative inline-block w-14 h-8">
+                                    <input type="checkbox" id="maintenance-toggle" class="sr-only peer" ${appStatus.maintenance.is_on ? 'checked' : ''}>
+                                    <div class="absolute inset-0 bg-gray-600 dark:bg-gray-700 rounded-full transition-colors duration-200 peer-checked:bg-blue-600 dark:peer-checked:bg-blue-500"></div>
+                                    <div class="absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform duration-200 peer-checked:translate-x-6"></div>
+                                </div>
+                                <div class="ml-3 text-gray-700 dark:text-gray-300 font-medium">Modo de Manutencao</div>
+                            </label>
+                            <textarea id="maintenance-message-input" class="mt-2 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Mensagem de manutencao..." ${!appStatus.maintenance.is_on ? 'disabled' : ''}>${appStatus.maintenance.message || ''}</textarea>
+                        </div>
+                        <div>
+                            <label for="announcement-message-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Anuncio Global (Markdown)</label>
+                            <textarea id="announcement-message-input" class="mt-1 w-full h-24 px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Deixe em branco para remover o anuncio. Suporta Markdown.">${appStatus.announcement?.message || ''}</textarea>
+                        </div>
+                        <button id="save-app-status-btn" class="w-full py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">Salvar Status da Aplicacao</button>
+                    </div>
+                </div>`;
+        } catch (error) {
+            window.addToLog(`Erro ao carregar controle da aplicacao: ${error.message}`, true);
+            appStatusHtml = `<p class="text-red-500">Erro ao carregar controle da aplicacao: ${error.message}</p>`;
+        }
+
+        let academySettingsHtml = '';
+        try {
+            const appSettings = await window.apiRequest('/api/app-settings', 'GET');
+            const welcomeVideoUrl = appSettings.welcomeVideoUrl;
+            academySettingsHtml = `
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mt-6">
+                    <h3 class="text-lg font-semibold mb-4">Configuracoes da Academy</h3>
+                    <div>
+                        <label for="welcome-video-url-input" class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">URL do Video de Boas-Vindas (YouTube)</label>
+                        <input type="url" id="welcome-video-url-input" class="mt-1 w-full px-4 py-3 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Cole a URL do video de boas-vindas aqui..." value="${welcomeVideoUrl || ''}">
+                    </div>
+                    <button id="save-academy-settings-btn" class="w-full py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 mt-4">Salvar Configuracoes da Academy</button>
+                </div>`;
+        } catch (error) {
+            console.error('âŒ [ADMIN] Erro ao carregar configuraÃ§Ãµes da Academy:', error);
+            window.addToLog(`Erro ao carregar configuracoes da Academy: ${error.message}`, true);
+            academySettingsHtml = `<p class="text-red-500">Erro ao carregar configuracoes da Academy: ${error.message}</p>`;
+        }
+    
+        const userManagementHtml = `
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mt-6">
+                <h3 class="text-lg font-semibold mb-4">Gerenciamento de Utilizadores</h3>
+                <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                    <input type="text" id="user-search-input" class="flex-1 px-4 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" placeholder="Buscar por email, whatsapp ou tags...">
+                    <select id="user-status-filter" class="px-4 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        <option value="active">Ativos</option>
+                        <option value="pending">Pendentes</option>
+                    </select>
+                    <select id="user-limit-filter" class="px-4 py-2 rounded-lg bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                        <option value="10">10 por pagina</option>
+                        <option value="50">50 por pagina</option>
+                        <option value="100">100 por pagina</option>
+                    </select>
+                </div>
+                <div id="user-list-container"></div>
+                <div id="user-pagination-controls" class="flex justify-center items-center gap-2 mt-4"></div>
+            </div>`;
+    
+        const chatManagementHtml = `
+            <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mt-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold">Gerenciamento de Chat</h3>
+                    <div class="flex items-center gap-3">
+                        <span id="chat-status-label" class="text-sm font-medium text-gray-700 dark:text-gray-300">Chat: <span id="chat-status-text">Carregando...</span></span>
+                        <button id="toggle-chat-enabled-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+                            Habilitar Chat
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Painel de Chat do Admin -->
+                <div class="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <h4 class="font-semibold text-gray-900 dark:text-gray-100 mb-3">ðŸ’¬ Chat Administrativo</h4>
+                    <div class="space-y-3">
+                        <!-- Menu de seleÃ§Ã£o de usuÃ¡rios e opÃ§Ãµes -->
+                        <div class="flex gap-2 flex-wrap">
+                            <div class="flex-1 min-w-[200px] relative">
+                                <input type="text" id="admin-chat-user-search" placeholder="Buscar por nome, email ou WhatsApp..." class="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white">
+                                <select id="admin-chat-user-select" class="w-full mt-2 px-4 py-2 rounded-lg bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white" size="5" style="display: none;">
+                                    <option value="">Selecione um usuÃ¡rio...</option>
+                                </select>
+                            </div>
+                            <button id="admin-start-chat-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">
+                                ðŸ’¬ Iniciar Conversa
+                            </button>
+                            <button id="admin-broadcast-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-orange-600 hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-600" title="Enviar mensagem para todos os usuÃ¡rios">
+                                ðŸ“¢ Enviar para Todos
+                            </button>
+                            <button id="admin-remote-access-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-purple-600 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600" title="Acesso Remoto - Ver tela do usuÃ¡rio">
+                                ðŸ” Acesso Remoto
+                            </button>
+                        </div>
+                        
+                        <!-- Sistema de Fila -->
+                        <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                            <div class="flex items-center justify-between mb-2">
+                                <div>
+                                    <h5 class="font-semibold text-gray-900 dark:text-gray-100">Fila de Atendimento</h5>
+                                    <p id="admin-queue-count" class="text-sm text-gray-600 dark:text-gray-400">0 usuÃ¡rio(s) aguardando</p>
+                                </div>
+                                <button id="admin-refresh-queue-btn" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md">
+                                    ðŸ”„ Atualizar
+                                </button>
+                            </div>
+                            <div id="admin-queue-list" class="space-y-2 max-h-40 overflow-y-auto"></div>
+                        </div>
+                        
+                        <div id="admin-chat-container" class="hidden mt-4">
+                            <div class="bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600" style="height: 600px; display: flex; flex-direction: column;">
+                                <div class="p-3 border-b border-gray-200 dark:border-gray-600 bg-[#075e54] text-white flex items-center justify-between">
+                                    <div class="flex-1">
+                                        <div class="flex items-center gap-2">
+                                            <h5 id="admin-chat-user-name" class="font-semibold">UsuÃ¡rio</h5>
+                                            <span id="admin-chat-ticket-number" class="text-xs bg-green-600 px-2 py-0.5 rounded hidden">Ticket #0000</span>
+                                        </div>
+                                        <p class="text-xs text-green-200">Chat Administrativo</p>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button id="admin-chat-close-ticket-btn" class="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 rounded hidden" title="Fechar Ticket">
+                                            Fechar Ticket
+                                        </button>
+                                        <button id="admin-close-chat-btn" class="text-white hover:text-gray-200">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="admin-chat-messages" class="flex-1 overflow-y-auto p-4 bg-[#ece5dd] space-y-2" style="max-height: 400px;"></div>
+                                <div class="p-3 border-t border-gray-200 dark:border-gray-600 bg-[#f0f0f0]">
+                                    <div class="flex gap-2 mb-2">
+                                        <input type="file" id="admin-chat-file-input" class="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.txt">
+                                        <button type="button" id="admin-chat-attach-btn" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 text-sm">
+                                            ðŸ“Ž Anexar
+                                        </button>
+                                        <button type="button" id="admin-chat-quick-reply-btn" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 text-sm">
+                                            âš¡ Resposta RÃ¡pida
+                                        </button>
+                                        <button type="button" id="admin-chat-transfer-btn" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 text-sm">
+                                            ðŸ”„ Transferir
+                                        </button>
+                                    </div>
+                                    <form id="admin-chat-form" class="flex gap-2">
+                                        <input type="text" id="admin-chat-input" placeholder="Digite uma mensagem..." class="flex-1 px-4 py-2 rounded-full bg-white border border-gray-300 text-gray-900 text-sm" autocomplete="off">
+                                        <button type="submit" class="w-10 h-10 bg-[#25d366] hover:bg-[#20ba5a] text-white rounded-full flex items-center justify-center">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                            </svg>
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Atendentes -->
+                <div class="mb-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-semibold text-gray-900 dark:text-gray-100">Atendentes</h4>
+                        <button id="add-new-attendant-btn" class="text-sm bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md dark:bg-blue-500 dark:hover:bg-blue-600">Adicionar Novo Atendente</button>
+                    </div>
+                    
+                    <!-- FormulÃ¡rio para adicionar/editar atendente (inicialmente oculto) -->
+                    <div id="attendant-form-container" class="mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg" style="display: none;">
+                        <h5 class="text-sm font-semibold mb-3 text-gray-900 dark:text-gray-100" id="attendant-form-title">Adicionar Novo Atendente</h5>
+                    <div class="mb-3">
+                            <select id="attendant-user-select" class="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-600 border border-gray-300 text-gray-900 dark:text-white">
+                                <option value="">Selecione um usuÃ¡rio admin...</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-2 mb-3">
+                            <input type="number" id="attendant-max-conversations" placeholder="MÃ¡x conversas" value="5" min="1" class="flex-1 px-4 py-2 rounded-lg bg-white dark:bg-gray-600 border border-gray-300 text-gray-900 dark:text-white">
+                        <label class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                            <input type="checkbox" id="attendant-is-active" checked class="rounded border-gray-300">
+                            Ativo
+                        </label>
+                    </div>
+                        <div class="flex gap-2">
+                            <button id="save-attendant-btn" class="flex-1 py-2 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">Salvar</button>
+                            <button id="cancel-attendant-btn" class="px-4 py-2 rounded-lg font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500">Cancelar</button>
+                        </div>
+                    </div>
+                    
+                    <div id="attendants-list" class="space-y-3"></div>
+                </div>
+                
+                <!-- Respostas RÃ¡pidas -->
+                <div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-semibold text-gray-900 dark:text-gray-100">Respostas RÃ¡pidas</h4>
+                        <button id="add-new-quick-reply-btn" class="text-sm bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md dark:bg-green-500 dark:hover:bg-green-600">Adicionar Nova Resposta RÃ¡pida</button>
+                    </div>
+                    
+                    <!-- FormulÃ¡rio para adicionar/editar resposta rÃ¡pida (inicialmente oculto) -->
+                    <div id="quick-reply-form-container" class="mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg" style="display: none;">
+                        <h5 class="text-sm font-semibold mb-3 text-gray-900 dark:text-gray-100" id="quick-reply-form-title">Adicionar Nova Resposta RÃ¡pida</h5>
+                    <div class="space-y-3 mb-3">
+                            <input type="text" id="quick-reply-title" placeholder="TÃ­tulo da resposta rÃ¡pida" class="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-600 border border-gray-300 text-gray-900 dark:text-white">
+                            <textarea id="quick-reply-message" placeholder="Mensagem..." rows="3" class="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-600 border border-gray-300 text-gray-900 dark:text-white"></textarea>
+                            <input type="url" id="quick-reply-link" placeholder="Link (opcional)" class="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-600 border border-gray-300 text-gray-900 dark:text-white">
+                        <label class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                            <input type="checkbox" id="quick-reply-is-active" checked class="rounded border-gray-300">
+                            Ativo
+                        </label>
+                    </div>
+                        <div class="flex gap-2">
+                            <button id="save-quick-reply-btn" class="flex-1 py-2 px-4 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">Salvar</button>
+                            <button id="cancel-quick-reply-btn" class="px-4 py-2 rounded-lg font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500">Cancelar</button>
+                        </div>
+                    </div>
+                    
+                    <div id="quick-replies-list" class="space-y-3"></div>
+                </div>
+                
+                <!-- Painel de Tickets/Atendimentos -->
+                <div class="mt-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-semibold text-gray-900 dark:text-gray-100">ðŸ“‹ Tickets de Atendimento</h4>
+                        <button id="clear-all-tickets-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600" title="Deletar todos os tickets">
+                            ðŸ—‘ï¸ Zerar Tickets
+                        </button>
+                    </div>
+                    
+                    <!-- Busca e Filtros -->
+                    <div class="mb-4 flex gap-2 flex-wrap">
+                        <input type="text" id="ticket-search-input" placeholder="Buscar por nÃºmero de ticket (ex: TKT-1234567890-ABC12)" class="flex-1 min-w-[200px] px-4 py-2 rounded-lg bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white">
+                        <select id="ticket-status-filter" class="px-4 py-2 rounded-lg bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white">
+                            <option value="all">Todos os Status</option>
+                            <option value="open">Abertos</option>
+                            <option value="closed">Fechados</option>
+                        </select>
+                        <button id="refresh-tickets-btn" class="px-4 py-2 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">
+                            ðŸ”„ Atualizar
+                        </button>
+                    </div>
+                    
+                    <!-- EstatÃ­sticas -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        <div class="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                            <p class="text-sm text-gray-600 dark:text-gray-400">Tickets Abertos</p>
+                            <p id="tickets-open-count" class="text-2xl font-bold text-green-600 dark:text-green-400">0</p>
+                        </div>
+                        <div class="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                            <p class="text-sm text-gray-600 dark:text-gray-400">Total de Tickets</p>
+                            <p id="tickets-total-count" class="text-2xl font-bold text-blue-600 dark:text-blue-400">0</p>
+                        </div>
+                        <div class="p-4 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+                            <p class="text-sm text-gray-600 dark:text-gray-400">Tickets Fechados</p>
+                            <p id="tickets-closed-count" class="text-2xl font-bold text-gray-600 dark:text-gray-400">0</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Lista de Tickets -->
+                    <div id="tickets-list" class="space-y-3"></div>
+                    <!-- PaginaÃ§Ã£o -->
+                    <div id="tickets-pagination" class="mt-4"></div>
+                </div>
+            </div>
+        `;
+
+        if (adminContainer) adminContainer.innerHTML = statsHtml + appStatusHtml + academySettingsHtml + userManagementHtml + chatManagementHtml + `
+            <div id="admin-academy-container" class="mt-6">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                    <h3 class="text-lg font-semibold mb-4">Gerenciamento de Aulas da Academy</h3>
+                    <button id="add-new-lesson-btn" class="w-full py-3 px-4 rounded-lg font-semibold text-white bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">Adicionar Nova Aula</button>
+                    <div id="academy-admin-lessons-list" class="mt-4 space-y-3"></div>
+                </div>
+            </div>
+        `;
+    
+        // Attach event listeners after setting innerHTML
+        document.getElementById('approve-all-users-btn')?.addEventListener('click', async () => {
+            window.showConfirmationModal('Aprovar Utilizadores', 'Tem certeza de que deseja ativar todas as contas pendentes?', async () => {
+                try {
+                    const response = await window.apiRequest('/api/admin/approve-all', 'POST');
+                    window.showSuccessToast(response.message);
+                    renderUsers(document.getElementById('user-status-filter')?.value, 1, window.appState.adminPanel.currentSearch);
+                } catch (error) {
+                    window.addToLog(`Erro ao aprovar utilizadores: ${error.message}`, true);
+                }
+            });
+        });
+    
+        const maintenanceToggle = document.getElementById('maintenance-toggle');
+        const maintenanceMessageInput = document.getElementById('maintenance-message-input');
+        if (maintenanceToggle && maintenanceMessageInput) {
+            // FunÃ§Ã£o para atualizar o estado visual do toggle
+            const updateToggleVisual = () => {
+                const toggleBg = maintenanceToggle.nextElementSibling;
+                const toggleDot = toggleBg?.nextElementSibling;
+                if (toggleBg && toggleDot) {
+                    if (maintenanceToggle.checked) {
+                        toggleBg.classList.remove('bg-gray-600', 'dark:bg-gray-700');
+                        toggleBg.classList.add('bg-blue-600', 'dark:bg-blue-500');
+                        toggleDot.classList.add('translate-x-6');
+                    } else {
+                        toggleBg.classList.remove('bg-blue-600', 'dark:bg-blue-500');
+                        toggleBg.classList.add('bg-gray-600', 'dark:bg-gray-700');
+                        toggleDot.classList.remove('translate-x-6');
+                    }
+                }
+            };
+            
+            // Atualiza o estado visual inicial
+            updateToggleVisual();
+            
+            // Atualiza quando o checkbox muda
+            maintenanceToggle.addEventListener('change', () => {
+                updateToggleVisual();
+                maintenanceMessageInput.disabled = !maintenanceToggle.checked;
+            });
+            
+            // Garante que o clique no label funcione
+            const toggleLabel = maintenanceToggle.closest('label');
+            if (toggleLabel) {
+                toggleLabel.addEventListener('click', (e) => {
+                    // Se clicou diretamente no checkbox, nÃ£o faz nada (jÃ¡ vai mudar)
+                    if (e.target === maintenanceToggle) return;
+                    // Se clicou em outro lugar do label, alterna o checkbox
+                    e.preventDefault();
+                    maintenanceToggle.checked = !maintenanceToggle.checked;
+                    maintenanceToggle.dispatchEvent(new Event('change'));
+                });
+            }
+        }
+    
+        document.getElementById('save-app-status-btn')?.addEventListener('click', async () => {
+            try {
+                const maintenanceToggleEl = document.getElementById('maintenance-toggle');
+                const maintenanceMessageInputEl = document.getElementById('maintenance-message-input');
+                const announcementMessageInputEl = document.getElementById('announcement-message-input');
+
+                await window.apiRequest('/api/admin/maintenance', 'POST', {
+                    is_on: maintenanceToggleEl?.checked,
+                    message: maintenanceMessageInputEl?.value.trim()
+                });
+                await window.apiRequest('/api/admin/announcement', 'POST', {
+                    message: announcementMessageInputEl?.value.trim()
+                });
+                window.showSuccessToast('Status da aplicacao salvo!');
+            } catch (error) {
+                window.addToLog(`Erro ao salvar status: ${error.message}`, true);
+            }
+        });
+
+        document.getElementById('save-academy-settings-btn')?.addEventListener('click', async () => {
+            try {
+                const welcomeVideoUrlInput = document.getElementById('welcome-video-url-input');
+                await window.apiRequest('/api/admin/app-settings', 'POST', {
+                    settings: { welcomeVideoUrl: welcomeVideoUrlInput?.value.trim() }
+                });
+                window.showSuccessToast('Configuracoes da Academy salvas!');
+            } catch (error) {
+                window.addToLog(`Erro ao salvar configuracoes da Academy: ${error.message}`, true);
+            }
+        });
+    
+        const userSearchInput = document.getElementById('user-search-input');
+        const userStatusFilter = document.getElementById('user-status-filter');
+        const userLimitFilter = document.getElementById('user-limit-filter');
+        const userListContainer = document.getElementById('user-list-container');
+        const userPaginationControls = document.getElementById('user-pagination-controls');
+        const batchTagContainer = document.getElementById('batch-tag-container');
+        const selectedUserCountSpan = document.getElementById('selected-user-count');
+        const batchTagsInput = document.getElementById('batch-tags-input');
+        const addTagsBatchBtn = document.getElementById('add-tags-batch-btn');
+        const removeTagsBatchBtn = document.getElementById('remove-tags-batch-btn');
+    
+        let selectedUserIds = new Set();
+    
+        const renderUsers = async (status = 'active', page = 1, search = '') => {
+            const limit = parseInt(userLimitFilter?.value || '10', 10);
+            window.appState.adminPanel[status].limit = limit;
+            try {
+                const response = await window.apiRequest(`/api/admin/users?status=${status}&page=${page}&limit=${limit}&search=${search}`, 'GET');
+                const users = response.data;
+                const totalPages = response.totalPages;
+                const currentPage = response.currentPage;
+    
+                if (userListContainer) {
+                    userListContainer.innerHTML = `
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                                <thead class="bg-gray-50 dark:bg-gray-700">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"><input type="checkbox" id="select-all-users" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500"></th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Email</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">WhatsApp</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cargo</th>
+                                        <th class="px-4 py-2 whitespace-nowrap text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tags</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Acoes</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                                    ${users.map(user => `
+                                        <tr class="${user.must_change_password ? 'bg-yellow-50 dark:bg-yellow-900/10' : ''}">
+                                            <td class="px-4 py-2 whitespace-nowrap"><input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:bg-gray-600 dark:border-gray-500 user-select-checkbox" data-user-id="${user.id}" ${selectedUserIds.has(user.id) ? 'checked' : ''}></td>
+                                            <td class="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">${user.email}</td>
+                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                                ${user.whatsapp ? `<a href="https://wa.me/${user.whatsapp.replace(/\D/g, '')}" target="_blank" class="text-blue-600 hover:underline">${user.whatsapp}</a>` : 'N/A'}
+                                            </td>
+                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${user.role}</td>
+                                            <td class="px-4 py-2 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${user.is_active ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300'}">${user.is_active ? 'Ativo' : 'Pendente'}</span>${user.must_change_password ? '<span class="ml-2 px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300">Senha Temp.</span>' : ''}</td>
+                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${user.tags ? user.tags.split(',').map(tag => `<span class="inline-block bg-gray-100 dark:bg-gray-700 rounded-full px-2 py-0.5 text-xs font-semibold text-gray-600 dark:text-gray-300 mr-1">${tag}</span>`).join('') : 'N/A'}</td>
+                                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm font-medium">
+                                                ${!user.is_active ? `<button class="approve-user-btn text-green-600 hover:text-green-900 dark:text-green-500 dark:hover:text-green-400 mr-2" data-user-id="${user.id}">Aprovar</button>` : ''}
+                                                <button class="edit-user-btn text-blue-600 hover:text-blue-900 dark:text-blue-500 dark:hover:text-blue-400" data-user-id="${user.id}">Editar</button>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                }
+    
+                if (userPaginationControls) {
+                    userPaginationControls.innerHTML = '';
+                    if (totalPages > 1) {
+                        let paginationHtml = `<button class="page-btn px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600" data-page="${currentPage - 1}" ${currentPage === 1 ? 'disabled' : ''}>Anterior</button>`;
+                        
+                        const maxPagesToShow = 5;
+                        let startPage = Math.max(1, currentPage - Math.floor(maxPagesToShow / 2));
+                        let endPage = Math.min(totalPages, startPage + maxPagesToShow - 1);
+                        if (endPage - startPage + 1 < maxPagesToShow) {
+                            startPage = Math.max(1, endPage - maxPagesToShow + 1);
+                        }
+
+                        for (let i = startPage; i <= endPage; i++) {
+                            paginationHtml += `<button class="page-btn px-3 py-1 rounded-md ${i === currentPage ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'}" data-page="${i}">${i}</button>`;
+                        }
+                        paginationHtml += `<button class="page-btn px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600" data-page="${currentPage + 1}" ${currentPage === totalPages ? 'disabled' : ''}>Proximo</button>`;
+                        userPaginationControls.innerHTML = paginationHtml;
+                    }
+        
+                    userPaginationControls.querySelectorAll('.page-btn').forEach(btn => {
+                        btn.addEventListener('click', (e) => {
+                            window.appState.adminPanel[status].currentPage = parseInt(e.target.dataset.page, 10);
+                            renderUsers(status, window.appState.adminPanel[status].currentPage, search);
+                        });
+                    });
+                }
+    
+                document.getElementById('select-all-users')?.addEventListener('change', (e) => {
+                    userListContainer?.querySelectorAll('.user-select-checkbox').forEach(checkbox => {
+                        checkbox.checked = e.target.checked;
+                        const userId = parseInt(checkbox.dataset.userId, 10);
+                        if (e.target.checked) selectedUserIds.add(userId);
+                        else selectedUserIds.delete(userId);
+                    });
+                    updateBatchTagContainerVisibility();
+                });
+    
+                userListContainer?.querySelectorAll('.user-select-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        const userId = parseInt(e.target.dataset.userId, 10);
+                        if (e.target.checked) selectedUserIds.add(userId);
+                        else selectedUserIds.delete(userId);
+                        updateBatchTagContainerVisibility();
+                    });
+                });
+    
+                userListContainer?.querySelectorAll('.edit-user-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => showEditUserModal(e.target.dataset.userId));
+                });
+
+                userListContainer?.querySelectorAll('.approve-user-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const userId = e.target.dataset.userId;
+                        window.showConfirmationModal('Aprovar Utilizador', `Tem a certeza de que deseja ativar o utilizador?`, async () => {
+                            try {
+                                await window.apiRequest(`/api/admin/user/${userId}/activate`, 'PUT');
+                                window.showSuccessToast('Utilizador ativado com sucesso!');
+                                renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                            } catch (error) {
+                                window.addToLog(`Erro ao ativar utilizador: ${error.message}`, true);
+                            }
+                        });
+                    });
+                });
+    
+                updateBatchTagContainerVisibility();
+    
+            } catch (error) {
+                window.addToLog(`Erro ao carregar utilizadores: ${error.message}`, true);
+                if (userListContainer) userListContainer.innerHTML = `<p class="text-red-500">Erro ao carregar utilizadores: ${error.message}</p>`;
+            }
+        };
+    
+        const updateBatchTagContainerVisibility = () => {
+            if (selectedUserIds.size > 0) {
+                if (batchTagContainer) batchTagContainer.style.display = 'block';
+                if (selectedUserCountSpan) selectedUserCountSpan.textContent = selectedUserIds.size;
+            } else {
+                if (batchTagContainer) batchTagContainer.style.display = 'none';
+            }
+        };
+    
+        userSearchInput?.addEventListener('input', window.debounce(() => {
+            window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage = 1; // Reset current page for active filter
+            window.appState.adminPanel.currentSearch = userSearchInput.value.trim();
+            renderUsers(window.appState.adminPanel.userStatusFilter, 1, window.appState.adminPanel.currentSearch);
+        }, 300));
+    
+        userStatusFilter?.addEventListener('change', (e) => {
+            window.appState.adminPanel.userStatusFilter = e.target.value; // Update the active filter
+            // Reset current page for the new filter status
+            window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage = 1;
+            renderUsers(window.appState.adminPanel.userStatusFilter, 1, window.appState.adminPanel.currentSearch);
+        });
+
+        userLimitFilter?.addEventListener('change', (e) => {
+            const newLimit = parseInt(e.target.value, 10);
+            window.appState.adminPanel.active.limit = newLimit;
+            window.appState.adminPanel.pending.limit = newLimit;
+            window.appState.adminPanel.active.currentPage = 1;
+            window.appState.adminPanel.pending.currentPage = 1;
+            renderUsers(window.appState.adminPanel.userStatusFilter, 1, window.appState.adminPanel.currentSearch);
+        });
+        addTagsBatchBtn?.addEventListener('click', async () => {
+            const tags = batchTagsInput?.value.trim();
+            if (!tags) { window.showSuccessToast('Por favor, insira tags para adicionar.'); return; }
+            if (selectedUserIds.size === 0) { window.showSuccessToast('Nenhum utilizador selecionado.'); return; }
+            window.showConfirmationModal('Adicionar Tags', `Tem certeza de que deseja adicionar as tags "${tags}" a ${selectedUserIds.size} utilizador(es)?`, async () => {
+                try {
+                    await window.apiRequest('/api/admin/tags/batch', 'POST', { userIds: Array.from(selectedUserIds), tags, action: 'add' });
+                    window.showSuccessToast('Tags adicionadas com sucesso!');
+                    selectedUserIds.clear();
+                    renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                } catch (error) {
+                    window.addToLog(`Erro ao adicionar tags: ${error.message}`, true);
+                }
+            });
+        });
+    
+        removeTagsBatchBtn?.addEventListener('click', async () => {
+            const tags = batchTagsInput?.value.trim();
+            if (!tags) { window.showSuccessToast('Por favor, insira tags para remover.'); return; }
+            if (selectedUserIds.size === 0) { window.showSuccessToast('Nenhum utilizador selecionado.'); return; }
+            window.showConfirmationModal('Remover Tags', `Tem certeza de que deseja remover as tags "${tags}" de ${selectedUserIds.size} utilizador(es)?`, async () => {
+                try {
+                    await window.apiRequest('/api/admin/tags/batch', 'POST', { userIds: Array.from(selectedUserIds), tags, action: 'remove' });
+                    window.showSuccessToast('Tags removidas com sucesso!');
+                    selectedUserIds.clear();
+                    renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                } catch (error) {
+                    window.addToLog(`Erro ao remover tags: ${error.message}`, true);
+                }
+            });
+        });
+    
+        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+    
+        const showEditUserModal = async (userId) => {
+            const modal = document.getElementById('edit-user-modal');
+            const form = document.getElementById('edit-user-form');
+            const feedbackEl = document.getElementById('edit-user-feedback');
+            
+            const newForm = form.cloneNode(true);
+            if (form && form.parentNode) form.parentNode.replaceChild(newForm, form);
+    
+            const editUserId = newForm.querySelector('#edit-user-id');
+            const editUserEmail = newForm.querySelector('#edit-user-email');
+            const editUserWhatsapp = newForm.querySelector('#edit-user-whatsapp');
+            const editUserTags = newForm.querySelector('#edit-user-tags');
+            const resetPasswordBtn = newForm.querySelector('#reset-password-btn');
+            const toggleStatusBtn = newForm.querySelector('#toggle-status-btn');
+            const toggleRoleBtn = newForm.querySelector('#toggle-role-btn');
+            const deleteUserBtn = newForm.querySelector('#delete-user-btn');
+            const cancelEditBtn = newForm.querySelector('#cancel-edit-btn');
+    
+            if (feedbackEl) feedbackEl.textContent = '';
+            if (modal) modal.style.display = 'flex';
+    
+            try {
+                const user = await window.apiRequest(`/api/user/${userId}/details`, 'GET');
+                if (editUserId) editUserId.value = user.id;
+                if (editUserEmail) editUserEmail.value = user.email;
+                if (editUserWhatsapp) editUserWhatsapp.value = user.whatsapp || '';
+                if (editUserTags) editUserTags.value = user.tags || '';
+    
+                if (toggleStatusBtn) {
+                    toggleStatusBtn.textContent = user.isActive ? 'Bloquear Utilizador' : 'Ativar Utilizador';
+                    toggleStatusBtn.classList.toggle('bg-red-500', user.isActive);
+                    toggleStatusBtn.classList.toggle('hover:bg-red-600', user.isActive);
+                    toggleStatusBtn.classList.toggle('bg-green-500', !user.isActive);
+                    toggleStatusBtn.classList.toggle('hover:bg-green-600', !user.isActive);
+                }
+    
+                if (toggleRoleBtn) {
+                    toggleRoleBtn.textContent = user.role === 'admin' ? 'Rebaixar para Utilizador' : 'Promover para Admin';
+                    toggleRoleBtn.classList.toggle('bg-purple-500', user.role !== 'admin');
+                    toggleRoleBtn.classList.toggle('hover:bg-purple-600', user.role !== 'admin');
+                    if (user.id === 1 || user.id === window.appState.currentUser?.id) {
+                        toggleRoleBtn.setAttribute('disabled', 'true');
+                        toggleRoleBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    } else {
+                        toggleRoleBtn.removeAttribute('disabled');
+                        toggleRoleBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    }
+                }
+    
+                if (resetPasswordBtn) {
+                    if (user.id === 1 || user.id === window.appState.currentUser?.id) {
+                        resetPasswordBtn.setAttribute('disabled', 'true');
+                        resetPasswordBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    } else {
+                        resetPasswordBtn.removeAttribute('disabled');
+                        resetPasswordBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    }
+                }
+    
+                if (deleteUserBtn) {
+                    if (user.id === 1 || user.id === window.appState.currentUser?.id) {
+                        deleteUserBtn.setAttribute('disabled', 'true');
+                        deleteUserBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                    } else {
+                        deleteUserBtn.removeAttribute('disabled');
+                        deleteUserBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    }
+                }
+    
+            } catch (error) {
+                if (feedbackEl) feedbackEl.textContent = error.message;
+                window.addToLog(`Erro ao carregar dados do utilizador: ${error.message}`, true);
+            }
+    
+            newForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (feedbackEl) feedbackEl.textContent = '';
+                try {
+                    const currentUserId = editUserId?.value;
+                    const currentEditUserEmail = editUserEmail?.value.trim();
+                    const currentEditUserWhatsapp = editUserWhatsapp?.value.trim();
+                    const currentEditUserTags = editUserTags?.value.trim();
+
+                    if (currentUserId) {
+                        await window.apiRequest(`/api/admin/user/${currentUserId}`, 'PUT', {
+                            email: currentEditUserEmail,
+                            whatsapp: currentEditUserWhatsapp,
+                            tags: currentEditUserTags
+                        });
+                        window.showSuccessToast('Utilizador atualizado!');
+                        if (modal) modal.style.display = 'none';
+                        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                    }
+                } catch (error) {
+                    if (feedbackEl) feedbackEl.textContent = error.message;
+                    window.addToLog(`Erro ao atualizar utilizador: ${error.message}`, true);
+                }
+            });
+    
+            resetPasswordBtn?.addEventListener('click', () => {
+                const currentUserId = editUserId?.value;
+                if (!currentUserId) return;
+                window.showConfirmationModal('Redefinir Senha', 'Tem certeza de que deseja redefinir a senha deste utilizador? Uma nova senha temporaria sera gerada.', async () => {
+                    try {
+                        const response = await window.apiRequest(`/api/admin/user/${currentUserId}/reset-password`, 'POST');
+                        window.showSuccessToast(response.message);
+                        if (modal) modal.style.display = 'none';
+                        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                    } catch (error) {
+                        window.addToLog(`Erro ao redefinir senha: ${error.message}`, true);
+                    }
+                });
+            });
+    
+            toggleStatusBtn?.addEventListener('click', async () => {
+                const currentUserId = editUserId?.value;
+                if (!currentUserId) return;
+                const user = await window.apiRequest(`/api/user/${currentUserId}/details`, 'GET'); // Get latest status
+                const currentStatusIsActive = user.isActive;
+                const action = currentStatusIsActive ? 'bloquear' : 'ativar';
+                window.showConfirmationModal(`${currentStatusIsActive ? 'Bloquear' : 'Ativar'} Utilizador`, `Tem certeza de que deseja ${action} este utilizador?`, async () => {
+                    try {
+                        if (!currentStatusIsActive) { // If currently inactive, activate
+                            await window.apiRequest(`/api/admin/user/${currentUserId}/activate`, 'PUT');
+                            window.showSuccessToast('Utilizador ativado com sucesso!');
+                        } else { // If currently active, block
+                            await window.apiRequest(`/api/admin/user/${currentUserId}/status`, 'PUT', { isActive: false });
+                            window.showSuccessToast('Utilizador bloqueado com sucesso!');
+                        }
+                        if (modal) modal.style.display = 'none';
+                        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                    } catch (error) {
+                        window.addToLog(`Erro ao alterar status: ${error.message}`, true);
+                    }
+                });
+            });
+    
+            toggleRoleBtn?.addEventListener('click', () => {
+                const currentUserId = editUserId?.value;
+                if (!currentUserId) return;
+                const currentRoleIsAdmin = toggleRoleBtn.textContent.includes('Rebaixar');
+                const newRole = currentRoleIsAdmin ? 'user' : 'admin';
+                window.showConfirmationModal('Alterar Cargo', `Tem certeza de que deseja ${currentRoleIsAdmin ? 'rebaixar' : 'promover'} este utilizador para ${newRole}?`, async () => {
+                    try {
+                        await window.apiRequest(`/api/admin/user/${currentUserId}/role`, 'PUT', { role: newRole });
+                        window.showSuccessToast(`Cargo do utilizador alterado para ${newRole}!`);
+                        if (modal) modal.style.display = 'none';
+                        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                    } catch (error) {
+                        window.addToLog(`Erro ao alterar cargo: ${error.message}`, true);
+                    }
+                });
+            });
+    
+            deleteUserBtn?.addEventListener('click', () => {
+                const currentUserId = editUserId?.value;
+                if (!currentUserId) return;
+                window.showConfirmationModal('Excluir Utilizador', 'Tem certeza de que deseja excluir este utilizador? Esta acao e irreversivel.', async () => {
+                    try {
+                        await window.apiRequest(`/api/admin/user/${currentUserId}`, 'DELETE');
+                        window.showSuccessToast('Utilizador excluido!');
+                        if (modal) modal.style.display = 'none';
+                        renderUsers(window.appState.adminPanel.userStatusFilter, window.appState.adminPanel[window.appState.adminPanel.userStatusFilter].currentPage, window.appState.adminPanel.currentSearch);
+                    } catch (error) {
+                        window.addToLog(`Erro ao excluir utilizador: ${error.message}`, true);
+                    }
+                });
+            });
+    
+            cancelEditBtn?.addEventListener('click', () => {
+                if (modal) modal.style.display = 'none';
+            });
+        };
+        
+        initializeAdminAcademy();
+    }
+
+    async function initializeAdminAcademy() {
+        const adminAcademyContainer = document.getElementById('admin-academy-container');
+        if (!adminAcademyContainer) return;
+    
+        const addLessonBtn = adminAcademyContainer.querySelector('#add-new-lesson-btn');
+        const lessonsListContainer = adminAcademyContainer.querySelector('#academy-admin-lessons-list');
+        const lessonModal = document.getElementById('academy-lesson-modal');
+        const lessonModalTitle = document.getElementById('lesson-modal-title');
+        const lessonForm = document.getElementById('academy-lesson-form');
+        const lessonIdInput = document.getElementById('lesson-id');
+        const lessonTitleInput = document.getElementById('lesson-title');
+        const lessonDescriptionInput = document.getElementById('lesson-description');
+        const lessonYoutubeUrlInput = document.getElementById('lesson-youtube-url');
+        const lessonFileUrlInput = document.getElementById('lesson-file-url');
+        const lessonFileNameInput = document.getElementById('lesson-file-name');
+        const lessonTagTextInput = document.getElementById('lesson-tag-text');
+        const lessonTagPositionSelect = document.getElementById('lesson-tag-position');
+        const lessonFormFeedback = document.getElementById('lesson-form-feedback');
+        const cancelLessonBtn = document.getElementById('cancel-lesson-btn');
+        const saveLessonBtn = document.getElementById('save-lesson-btn');
+
+        let currentLessonsOrder = []; // To store the order of lessons for drag and drop
+    
+        const renderAdminAcademyLessons = async () => {
+            try {
+                const lessons = await window.apiRequest('/api/admin/academy', 'GET');
+                currentLessonsOrder = lessons.map(lesson => lesson.id); // Initialize order
+                if (lessonsListContainer) {
+                    lessonsListContainer.innerHTML = ''; // Clear existing content to prevent duplication
+                    if (lessons.length === 0) {
+                        lessonsListContainer.innerHTML = '<p class="text-center text-gray-500 dark:text-gray-400">Nenhuma aula adicionada ainda.</p>';
+                    } else {
+                        lessonsListContainer.innerHTML = lessons.map(lesson => `
+                            <div class="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-3 flex justify-between items-center academy-admin-lesson-item"
+                                 draggable="true" data-lesson-id="${lesson.id}">
+                                <div class="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400 cursor-grab handle" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                                    </svg>
+                                    <div>
+                                        <p class="font-semibold text-gray-900 dark:text-gray-100">${lesson.title}</p>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">${new Date(lesson.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button class="edit-lesson-btn text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded-md hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40" data-lesson-id="${lesson.id}">Editar</button>
+                                    <button class="delete-lesson-btn text-sm bg-red-100 text-red-800 px-3 py-1 rounded-md hover:bg-red-200 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40" data-lesson-id="${lesson.id}">Excluir</button>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+                }
+                lessonsListContainer?.querySelectorAll('.edit-lesson-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => openLessonModal(e.target.dataset.lessonId));
+                });
+                lessonsListContainer?.querySelectorAll('.delete-lesson-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => deleteLesson(e.target.dataset.lessonId));
+                });
+                setupAdminAcademyDragAndDrop();
+            } catch (error) {
+                window.addToLog(`Erro ao carregar aulas da Academy para admin: ${error.message}`, true);
+                if (lessonsListContainer) lessonsListContainer.innerHTML = `<p class="text-red-500">Erro ao carregar aulas: ${error.message}</p>`;
+            }
+        };
+
+        const setupAdminAcademyDragAndDrop = () => {
+            const lessonsContainer = document.getElementById('academy-admin-lessons-list');
+            if (!lessonsContainer) return;
+        
+            let draggedItem = null;
+        
+            lessonsContainer.addEventListener('dragstart', (e) => {
+                const target = e.target.closest('.academy-admin-lesson-item');
+                if (target) {
+                    draggedItem = target;
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', draggedItem.dataset.lessonId);
+                    setTimeout(() => draggedItem.classList.add('dragging'), 0);
+                }
+            });
+        
+            lessonsContainer.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const target = e.target.closest('.academy-admin-lesson-item');
+                if (target && target !== draggedItem) {
+                    const bounding = target.getBoundingClientRect();
+                    const offset = bounding.y + (bounding.height / 2);
+                    if (e.clientY - offset > 0) {
+                        target.classList.remove('over-top');
+                        target.classList.add('over-bottom');
+                    } else {
+                        target.classList.remove('over-bottom');
+                        target.classList.add('over-top');
+                    }
+                }
+            });
+        
+            lessonsContainer.addEventListener('dragleave', (e) => {
+                const target = e.target.closest('.academy-admin-lesson-item');
+                if (target) {
+                    target.classList.remove('over-top', 'over-bottom');
+                }
+            });
+        
+            lessonsContainer.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                const droppedOn = e.target.closest('.academy-admin-lesson-item');
+                if (draggedItem && droppedOn && draggedItem !== draggedItem) {
+                    const isBefore = droppedOn.classList.contains('over-top');
+                    if (isBefore) {
+                        lessonsContainer.insertBefore(draggedItem, droppedOn);
+                    } else {
+                        lessonsContainer.insertBefore(draggedItem, droppedOn.nextSibling);
+                    }
+        
+                    const newOrder = Array.from(lessonsContainer.children)
+                        .filter(el => el.classList.contains('academy-admin-lesson-item'))
+                        .map(el => parseInt(el.dataset.lessonId, 10));
+                    
+                    try {
+                        await window.apiRequest('/api/admin/academy/reorder', 'PUT', { newOrder });
+                        window.showSuccessToast('Ordem das aulas atualizada!');
+                        renderAdminAcademyLessons();
+                        window.initializeAcademy();
+                    } catch (error) {
+                        window.addToLog(`Erro ao salvar nova ordem: ${error.message}`, true);
+                        renderAdminAcademyLessons(); // Re-render to revert visual change on error
+                    }
+                }
+                lessonsContainer.querySelectorAll('.academy-admin-lesson-item').forEach(item => {
+                    item.classList.remove('over-top', 'over-bottom');
+                });
+            });
+        
+            lessonsContainer.addEventListener('dragend', (e) => {
+                if (draggedItem) {
+                    draggedItem.classList.remove('dragging');
+                }
+                lessonsContainer.querySelectorAll('.academy-admin-lesson-item').forEach(item => {
+                    item.classList.remove('over-top', 'over-bottom');
+                });
+                draggedItem = null;
+            });
+        };
+    
+        const openLessonModal = async (lessonId = null) => {
+            if (lessonForm) lessonForm.reset();
+            if (lessonFormFeedback) lessonFormFeedback.textContent = '';
+            if (lessonIdInput) lessonIdInput.value = ''; // Clear lessonId for new lessons
+
+            if (lessonId) {
+                if (lessonModalTitle) lessonModalTitle.textContent = 'Editar Aula';
+                try {
+                    const lessons = await window.apiRequest('/api/admin/academy', 'GET');
+                    const lesson = lessons.find(l => String(l.id) === String(lessonId));
+                    if (lesson) {
+                        if (lessonIdInput) lessonIdInput.value = lesson.id;
+                        if (lessonTitleInput) lessonTitleInput.value = lesson.title;
+                        if (lessonDescriptionInput) lessonDescriptionInput.value = lesson.description || '';
+                        if (lessonYoutubeUrlInput) lessonYoutubeUrlInput.value = lesson.youtube_url;
+                        if (lessonFileUrlInput) lessonFileUrlInput.value = lesson.file_url || '';
+                        if (lessonFileNameInput) lessonFileNameInput.value = lesson.file_name || '';
+                        if (lessonTagTextInput) lessonTagTextInput.value = lesson.tag_text || '';
+                        if (lessonTagPositionSelect) lessonTagPositionSelect.value = lesson.tag_position || 'top-2 left-2';
+                    }
+                } catch (error) {
+                    window.addToLog(`Erro ao carregar dados da aula: ${error.message}`, true);
+                    if (lessonFormFeedback) lessonFormFeedback.textContent = `Erro ao carregar aula: ${error.message}`;
+                }
+            } else {
+                if (lessonModalTitle) lessonModalTitle.textContent = 'Adicionar Nova Aula';
+                // Reset all fields for a new lesson
+                if (lessonTitleInput) lessonTitleInput.value = '';
+                if (lessonDescriptionInput) lessonDescriptionInput.value = '';
+                if (lessonYoutubeUrlInput) lessonYoutubeUrlInput.value = '';
+                if (lessonFileUrlInput) lessonFileUrlInput.value = '';
+                if (lessonFileNameInput) lessonFileNameInput.value = '';
+                if (lessonTagTextInput) lessonTagTextInput.value = '';
+                if (lessonTagPositionSelect) lessonTagPositionSelect.value = 'top-2 left-2'; // Default position
+            }
+            if (lessonModal) lessonModal.style.display = 'flex';
+        };
+    
+        const closeLessonModal = () => {
+            if (lessonModal) lessonModal.style.display = 'none';
+            if (lessonFormFeedback) lessonFormFeedback.textContent = ''; // Clear feedback on close
+        };
+    
+        const saveLesson = async (e) => {
+            e.preventDefault();
+            if (lessonFormFeedback) lessonFormFeedback.textContent = '';
+    
+            const lessonData = {
+                title: lessonTitleInput?.value.trim(),
+                description: lessonDescriptionInput?.value.trim(),
+                youtube_url: lessonYoutubeUrlInput?.value.trim(),
+                file_url: lessonFileUrlInput?.value.trim(),
+                file_name: lessonFileNameInput?.value.trim(),
+                tag_text: lessonTagTextInput?.value.trim(),
+                tag_position: lessonTagPositionSelect?.value,
+            };
+    
+            if (!lessonData.title || !lessonData.youtube_url) {
+                if (lessonFormFeedback) lessonFormFeedback.textContent = 'TÃ­tulo e URL do YouTube sÃ£o obrigatÃ³rios.';
+                return;
+            }
+    
+            try {
+                if (lessonIdInput?.value) {
+                    await window.apiRequest(`/api/admin/academy/${lessonIdInput.value}`, 'PUT', lessonData);
+                    window.showSuccessToast('Aula atualizada com sucesso!');
+                } else {
+                    await window.apiRequest('/api/admin/academy', 'POST', lessonData);
+                    window.showSuccessToast('Aula adicionada com sucesso!');
+                }
+                closeLessonModal();
+                renderAdminAcademyLessons();
+                window.initializeAcademy(); // Re-render public academy to reflect changes
+            } catch (error) {
+                window.addToLog(`Erro ao salvar aula: ${error.message}`, true);
+                if (lessonFormFeedback) lessonFormFeedback.textContent = `Erro ao salvar aula: ${error.message}`;
+            }
+        };
+    
+        const deleteLesson = (lessonId) => {
+            window.showConfirmationModal('Excluir Aula', 'Tem certeza de que deseja excluir esta aula? Esta acao e irreversivel.', async () => {
+                try {
+                    await window.apiRequest(`/api/admin/academy/${lessonId}`, 'DELETE');
+                    window.showSuccessToast('Aula excluida!');
+                    renderAdminAcademyLessons();
+                    window.initializeAcademy(); // Re-render public academy to reflect changes
+                } catch (error) {
+                    window.addToLog(`Erro ao excluir aula: ${error.message}`, true);
+                }
+            });
+        };
+    
+        // Attach event listeners
+        addLessonBtn?.addEventListener('click', () => openLessonModal());
+        cancelLessonBtn?.addEventListener('click', closeLessonModal);
+        lessonForm?.addEventListener('submit', saveLesson);
+    
+        renderAdminAcademyLessons();
+
+        // ================================================
+        // ðŸ’¬ Gerenciamento de Chat - Admin
+        // ================================================
+        
+        // Carregar usuÃ¡rios para o select de atendentes (apenas admins)
+        async function loadUsersForAttendants() {
+            try {
+                const response = await window.apiRequest('/api/admin/users?status=active&page=1&limit=1000', 'GET');
+                const select = document.getElementById('attendant-user-select');
+                if (select) {
+                    // Filtrar apenas usuÃ¡rios admin
+                    const adminUsers = response.data.filter(user => user.role === 'admin');
+                    select.innerHTML = '<option value="">Selecione um administrador...</option>' + 
+                        adminUsers.map(user => `<option value="${user.id}">${user.email}</option>`).join('');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar usuÃ¡rios:', error);
+            }
+        }
+
+        // Carregar atendentes
+        async function loadAttendants() {
+            try {
+                console.log('ðŸ‘¥ Carregando atendentes...');
+                const response = await window.apiRequest('/api/chat/attendants', 'GET');
+                console.log('ðŸ‘¥ Resposta da API:', response);
+                console.log('ðŸ‘¥ Tipo da resposta:', typeof response, Array.isArray(response));
+                
+                // Garantir que temos um array
+                let attendants = [];
+                if (Array.isArray(response)) {
+                    attendants = response;
+                } else if (response && Array.isArray(response.data)) {
+                    attendants = response.data;
+                } else if (response && typeof response === 'object' && Object.keys(response).length === 0) {
+                    // Objeto vazio - nÃ£o hÃ¡ atendentes
+                    attendants = [];
+                } else {
+                    console.warn('âš ï¸ Resposta inesperada da API:', response);
+                    attendants = [];
+                }
+                
+                console.log('ðŸ‘¥ Atendentes processados:', attendants.length);
+                console.log('ðŸ‘¥ Dados dos atendentes:', attendants);
+                const container = document.getElementById('attendants-list');
+                if (!container) {
+                    console.error('âŒ Container de atendentes nÃ£o encontrado! Verificando DOM...');
+                    // Tentar encontrar o container novamente apÃ³s um delay
+                    setTimeout(() => {
+                        const retryContainer = document.getElementById('attendants-list');
+                        if (retryContainer) {
+                            console.log('âœ… Container encontrado apÃ³s retry');
+                            loadAttendants();
+                        } else {
+                            console.error('âŒ Container ainda nÃ£o encontrado apÃ³s retry');
+                        }
+                    }, 1000);
+                    return;
+                }
+                
+                console.log('âœ… Container encontrado, renderizando lista...');
+                
+                if (attendants.length === 0) {
+                    container.innerHTML = '<p class="text-center text-gray-500 dark:text-gray-400">Nenhum atendente configurado ainda.</p>';
+                } else {
+                    container.innerHTML = attendants.map(att => `
+                            <div class="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-3 flex justify-between items-center">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded-full ${att.is_active === 1 ? 'bg-green-500' : 'bg-gray-400'} flex items-center justify-center">
+                                        <span class="text-white font-semibold">${(att.email || 'A')[0].toUpperCase()}</span>
+                                    </div>
+                                <div>
+                                    <p class="font-semibold text-gray-900 dark:text-gray-100">${att.email}</p>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                                            MÃ¡x: ${att.max_conversations || 5} conversas | 
+                                            ${att.is_active === 1 ? 'ðŸŸ¢ Online' : 'âš« Offline'} |
+                                            ${att.active_conversations || 0} ativas
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button class="toggle-attendant-status-btn text-sm ${att.is_active === 1 ? 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/40' : 'bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500'} px-3 py-1 rounded-md" data-user-id="${att.user_id}" data-current-status="${att.is_active}">
+                                        ${att.is_active === 1 ? 'Colocar Offline' : 'Colocar Online'}
+                                    </button>
+                                    <button class="edit-attendant-btn text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded-md hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40" data-user-id="${att.user_id}">Editar</button>
+                                    <button class="remove-attendant-btn text-sm bg-red-100 text-red-800 px-3 py-1 rounded-md hover:bg-red-200 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40" data-user-id="${att.user_id}">Remover</button>
+                                </div>
+                            </div>
+                        `).join('');
+                        
+                        container.querySelectorAll('.toggle-attendant-status-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const userId = parseInt(btn.dataset.userId);
+                                const currentStatus = parseInt(btn.dataset.currentStatus);
+                                const newStatus = currentStatus === 1 ? 0 : 1;
+                                try {
+                                    await window.apiRequest('/api/chat/attendants', 'POST', {
+                                        userId,
+                                        isActive: newStatus === 1,
+                                        maxConversations: attendants.find(a => a.user_id === userId)?.max_conversations || 5
+                                    });
+                                    window.showSuccessToast(`Atendente ${newStatus === 1 ? 'colocado online' : 'colocado offline'}!`);
+                                    await loadAttendants();
+                                } catch (error) {
+                                    window.addToLog(`Erro ao alterar status: ${error.message}`, true);
+                                }
+                            });
+                        });
+                        
+                        container.querySelectorAll('.edit-attendant-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const userId = parseInt(btn.dataset.userId);
+                                const selectedAtt = attendants.find(a => a.user_id === userId);
+                                if (selectedAtt) {
+                                    // Preencher formulÃ¡rio
+                                    document.getElementById('attendant-user-select').value = selectedAtt.user_id;
+                                    document.getElementById('attendant-max-conversations').value = selectedAtt.max_conversations || 5;
+                                    document.getElementById('attendant-is-active').checked = selectedAtt.is_active === 1;
+                                    // Mostrar e preencher formulÃ¡rio
+                                    const formContainer = document.getElementById('attendant-form-container');
+                                    const formTitle = document.getElementById('attendant-form-title');
+                                    if (formContainer) {
+                                        formContainer.style.display = 'block';
+                                        if (formTitle) formTitle.textContent = 'Editar Atendente';
+                                    }
+                                    // Mudar botÃ£o salvar
+                                    const saveBtn = document.getElementById('save-attendant-btn');
+                                    if (saveBtn) {
+                                        saveBtn.dataset.editUserId = selectedAtt.user_id;
+                                    }
+                                    // Scroll para o formulÃ¡rio
+                                    formContainer?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                            });
+                        });
+                        
+                        container.querySelectorAll('.remove-attendant-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const userId = parseInt(btn.dataset.userId);
+                                if (confirm('Tem certeza que deseja remover este atendente?')) {
+                                    try {
+                                        await window.apiRequest(`/api/chat/attendants/${userId}`, 'DELETE');
+                                        window.showSuccessToast('Atendente removido!');
+                                        loadAttendants();
+                                    } catch (error) {
+                                        window.addToLog(`Erro ao remover atendente: ${error.message}`, true);
+                                    }
+                                }
+                            });
+                        });
+                    }
+            } catch (error) {
+                console.error('Erro ao carregar atendentes:', error);
+            }
+        }
+
+        // Carregar respostas rÃ¡pidas
+        async function loadQuickRepliesAdmin() {
+            try {
+                console.log('ðŸ’¬ Carregando respostas rÃ¡pidas...');
+                const response = await window.apiRequest('/api/chat/quick-replies', 'GET');
+                console.log('ðŸ’¬ Resposta da API:', response);
+                console.log('ðŸ’¬ Tipo da resposta:', typeof response, Array.isArray(response));
+                
+                // Garantir que temos um array
+                let replies = [];
+                if (Array.isArray(response)) {
+                    replies = response;
+                } else if (response && Array.isArray(response.data)) {
+                    replies = response.data;
+                } else if (response && typeof response === 'object' && Object.keys(response).length === 0) {
+                    // Objeto vazio - nÃ£o hÃ¡ respostas
+                    replies = [];
+                } else {
+                    console.warn('âš ï¸ Resposta inesperada da API:', response);
+                    replies = [];
+                }
+                
+                console.log('ðŸ’¬ Respostas processadas:', replies.length);
+                console.log('ðŸ’¬ Dados das respostas:', replies);
+                const container = document.getElementById('quick-replies-list');
+                if (!container) {
+                    console.error('âŒ Container de respostas rÃ¡pidas nÃ£o encontrado! Verificando DOM...');
+                    // Tentar encontrar o container novamente apÃ³s um delay
+                    setTimeout(() => {
+                        const retryContainer = document.getElementById('quick-replies-list');
+                        if (retryContainer) {
+                            console.log('âœ… Container encontrado apÃ³s retry');
+                            loadQuickRepliesAdmin();
+                        } else {
+                            console.error('âŒ Container ainda nÃ£o encontrado apÃ³s retry');
+                        }
+                    }, 1000);
+                    return;
+                }
+                
+                console.log('âœ… Container encontrado, renderizando lista...');
+                // NÃ£o precisamos mais do dropdown, removido
+                
+                if (replies.length === 0) {
+                    container.innerHTML = '<p class="text-center text-gray-500 dark:text-gray-400">Nenhuma resposta rÃ¡pida configurada ainda.</p>';
+                } else {
+                    container.innerHTML = replies.map(reply => `
+                            <div class="bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-3 flex justify-between items-center">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <p class="font-semibold text-gray-900 dark:text-gray-100">${reply.title}</p>
+                                        <span class="px-2 py-0.5 text-xs rounded-full ${reply.is_active === 1 ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300' : 'bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-300'}">
+                                            ${reply.is_active === 1 ? 'ðŸŸ¢ Ativo' : 'âš« Inativo'}
+                                        </span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 dark:text-gray-300 mb-1">${(reply.message_text || reply.message || '').substring(0, 100)}${(reply.message_text || reply.message || '').length > 100 ? '...' : ''}</p>
+                                    ${reply.link ? `<a href="${reply.link}" target="_blank" class="text-xs text-blue-600 hover:underline dark:text-blue-400">${reply.link}</a>` : ''}
+                                    </div>
+                                <div class="flex gap-2 ml-4">
+                                    <button class="edit-quick-reply-btn text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded-md hover:bg-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40" data-reply-id="${reply.id}">Editar</button>
+                                    <button class="delete-quick-reply-btn text-sm bg-red-100 text-red-800 px-3 py-1 rounded-md hover:bg-red-200 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40" data-reply-id="${reply.id}">Deletar</button>
+                                </div>
+                            </div>
+                        `).join('');
+                        
+                        container.querySelectorAll('.edit-quick-reply-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const reply = replies.find(r => r.id === parseInt(btn.dataset.replyId));
+                                if (reply) {
+                                    document.getElementById('quick-reply-title').value = reply.title || '';
+                                    document.getElementById('quick-reply-message').value = reply.message_text || reply.message || '';
+                                    document.getElementById('quick-reply-link').value = reply.link || '';
+                                    document.getElementById('quick-reply-is-active').checked = reply.is_active === 1;
+                                    // Mostrar e preencher formulÃ¡rio
+                                    const formContainer = document.getElementById('quick-reply-form-container');
+                                    const formTitle = document.getElementById('quick-reply-form-title');
+                                    if (formContainer) {
+                                        formContainer.style.display = 'block';
+                                        if (formTitle) formTitle.textContent = 'Editar Resposta RÃ¡pida';
+                                    }
+                                    // Mudar botÃ£o salvar
+                                    const saveBtn = document.getElementById('save-quick-reply-btn');
+                                    if (saveBtn) {
+                                        saveBtn.dataset.editId = reply.id;
+                                    }
+                                    // Scroll para o formulÃ¡rio
+                                    formContainer?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                            });
+                        });
+                        
+                        container.querySelectorAll('.delete-quick-reply-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const replyId = parseInt(btn.dataset.replyId);
+                                if (confirm('Tem certeza que deseja deletar esta resposta rÃ¡pida?')) {
+                                    try {
+                                        await window.apiRequest(`/api/chat/quick-replies/${replyId}`, 'DELETE');
+                                        window.showSuccessToast('Resposta rÃ¡pida deletada!');
+                                        loadQuickRepliesAdmin();
+                                    } catch (error) {
+                                        window.addToLog(`Erro ao deletar resposta rÃ¡pida: ${error.message}`, true);
+                                    }
+                                }
+                            });
+                        });
+                    }
+            } catch (error) {
+                console.error('Erro ao carregar respostas rÃ¡pidas:', error);
+            }
+        }
+
+        // Event listeners para atendentes
+        const addNewAttendantBtn = document.getElementById('add-new-attendant-btn');
+        if (addNewAttendantBtn) {
+            addNewAttendantBtn.addEventListener('click', () => {
+                const formContainer = document.getElementById('attendant-form-container');
+                const formTitle = document.getElementById('attendant-form-title');
+                if (formContainer) {
+                    formContainer.style.display = 'block';
+                    if (formTitle) formTitle.textContent = 'Adicionar Novo Atendente';
+                    // Limpar formulÃ¡rio
+                    document.getElementById('attendant-user-select').value = '';
+                    document.getElementById('attendant-max-conversations').value = '5';
+                    document.getElementById('attendant-is-active').checked = true;
+                    const saveBtn = document.getElementById('save-attendant-btn');
+                    if (saveBtn) {
+                        delete saveBtn.dataset.editUserId;
+                    }
+                    formContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
+        }
+        
+        const cancelAttendantBtn = document.getElementById('cancel-attendant-btn');
+        if (cancelAttendantBtn) {
+            cancelAttendantBtn.addEventListener('click', () => {
+                const formContainer = document.getElementById('attendant-form-container');
+                if (formContainer) {
+                    formContainer.style.display = 'none';
+                    // Limpar formulÃ¡rio
+                    document.getElementById('attendant-user-select').value = '';
+                    document.getElementById('attendant-max-conversations').value = '5';
+                    document.getElementById('attendant-is-active').checked = true;
+                    const saveBtn = document.getElementById('save-attendant-btn');
+                    if (saveBtn) {
+                        delete saveBtn.dataset.editUserId;
+                    }
+                }
+            });
+        }
+        
+        const saveAttendantBtn = document.getElementById('save-attendant-btn');
+        if (saveAttendantBtn) {
+            saveAttendantBtn.addEventListener('click', async () => {
+                const editUserId = saveAttendantBtn.dataset.editUserId ? parseInt(saveAttendantBtn.dataset.editUserId) : null;
+                const userId = editUserId || parseInt(document.getElementById('attendant-user-select')?.value);
+                const maxConversations = parseInt(document.getElementById('attendant-max-conversations')?.value || '5');
+                const isActive = document.getElementById('attendant-is-active')?.checked;
+                
+                if (!userId) {
+                    window.showSuccessToast('Selecione um usuÃ¡rio admin');
+                    return;
+                }
+                
+                try {
+                    console.log('ðŸ“¤ Enviando dados do atendente:', { userId, maxConversations, isActive });
+                    const response = await window.apiRequest('/api/chat/attendants', 'POST', {
+                        userId,
+                        maxConversations,
+                        isActive
+                    });
+                    console.log('âœ… Resposta do servidor:', response);
+                    window.showSuccessToast(editUserId ? 'Atendente atualizado!' : 'Atendente adicionado!');
+                    
+                    // Ocultar formulÃ¡rio
+                    const formContainer = document.getElementById('attendant-form-container');
+                    if (formContainer) {
+                        formContainer.style.display = 'none';
+                    }
+                    
+                    // Limpar formulÃ¡rio
+                    document.getElementById('attendant-user-select').value = '';
+                    document.getElementById('attendant-max-conversations').value = '5';
+                    document.getElementById('attendant-is-active').checked = true;
+                    delete saveAttendantBtn.dataset.editUserId;
+                    
+                    // Aguardar um pouco para garantir que o servidor processou
+                    await new Promise(resolve => setTimeout(resolve, 800));
+                    
+                    // Recarregar lista de atendentes
+                    console.log('ðŸ”„ Recarregando lista de atendentes...');
+                    const container = document.getElementById('attendants-list');
+                    if (container) {
+                        container.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400">Carregando...</p>';
+                    }
+                    
+                    // Recarregar mÃºltiplas vezes para garantir
+                    await loadAttendants();
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    await loadAttendants(); // Recarregar novamente
+                    await loadUsersForAttendants();
+                    console.log('âœ… Lista de atendentes recarregada');
+                } catch (error) {
+                    console.error('âŒ Erro ao salvar atendente:', error);
+                    window.showSuccessToast(`Erro ao salvar atendente: ${error.message}`, true);
+                    window.addToLog(`Erro ao salvar atendente: ${error.message}`, true);
+                    await loadAttendants();
+                }
+            });
+        }
+
+        // Event listeners para respostas rÃ¡pidas
+        const addNewQuickReplyBtn = document.getElementById('add-new-quick-reply-btn');
+        if (addNewQuickReplyBtn) {
+            addNewQuickReplyBtn.addEventListener('click', () => {
+                const formContainer = document.getElementById('quick-reply-form-container');
+                const formTitle = document.getElementById('quick-reply-form-title');
+                if (formContainer) {
+                    formContainer.style.display = 'block';
+                    if (formTitle) formTitle.textContent = 'Adicionar Nova Resposta RÃ¡pida';
+                    // Limpar formulÃ¡rio
+                    document.getElementById('quick-reply-title').value = '';
+                    document.getElementById('quick-reply-message').value = '';
+                    document.getElementById('quick-reply-link').value = '';
+                    document.getElementById('quick-reply-is-active').checked = true;
+                    const saveBtn = document.getElementById('save-quick-reply-btn');
+                    if (saveBtn) {
+                        delete saveBtn.dataset.editId;
+                    }
+                    formContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
+        }
+        
+        const cancelQuickReplyBtn = document.getElementById('cancel-quick-reply-btn');
+        if (cancelQuickReplyBtn) {
+            cancelQuickReplyBtn.addEventListener('click', () => {
+                const formContainer = document.getElementById('quick-reply-form-container');
+                if (formContainer) {
+                    formContainer.style.display = 'none';
+                    // Limpar formulÃ¡rio
+                    document.getElementById('quick-reply-title').value = '';
+                    document.getElementById('quick-reply-message').value = '';
+                    document.getElementById('quick-reply-link').value = '';
+                    document.getElementById('quick-reply-is-active').checked = true;
+                    const saveBtn = document.getElementById('save-quick-reply-btn');
+                    if (saveBtn) {
+                        delete saveBtn.dataset.editId;
+                    }
+                }
+            });
+        }
+        
+        const saveQuickReplyBtn = document.getElementById('save-quick-reply-btn');
+        if (saveQuickReplyBtn) {
+            saveQuickReplyBtn.addEventListener('click', async () => {
+                const title = document.getElementById('quick-reply-title')?.value.trim();
+                const message = document.getElementById('quick-reply-message')?.value.trim();
+                const link = document.getElementById('quick-reply-link')?.value.trim();
+                const isActive = document.getElementById('quick-reply-is-active')?.checked;
+                const editId = saveQuickReplyBtn.dataset.editId;
+                
+                if (!title || !message) {
+                    window.showSuccessToast('TÃ­tulo e mensagem sÃ£o obrigatÃ³rios');
+                    return;
+                }
+                
+                try {
+                    console.log('ðŸ“¤ Enviando dados da resposta rÃ¡pida:', { id: editId ? parseInt(editId) : null, title, messageText: message, link: link || null, isActive });
+                    const response = await window.apiRequest('/api/chat/quick-replies', 'POST', {
+                        id: editId ? parseInt(editId) : null,
+                        title,
+                        messageText: message,
+                        link: link || null,
+                        isActive
+                    });
+                    console.log('âœ… Resposta do servidor:', response);
+                    window.showSuccessToast(editId ? 'Resposta rÃ¡pida atualizada!' : 'Resposta rÃ¡pida adicionada!');
+                    
+                    // Ocultar formulÃ¡rio
+                    const formContainer = document.getElementById('quick-reply-form-container');
+                    if (formContainer) {
+                        formContainer.style.display = 'none';
+                    }
+                    
+                    // Limpar formulÃ¡rio
+                    document.getElementById('quick-reply-title').value = '';
+                    document.getElementById('quick-reply-message').value = '';
+                    document.getElementById('quick-reply-link').value = '';
+                    document.getElementById('quick-reply-is-active').checked = true;
+                    delete saveQuickReplyBtn.dataset.editId;
+                    
+                    // Aguardar um pouco para garantir que o servidor processou
+                    await new Promise(resolve => setTimeout(resolve, 800));
+                    
+                    // Recarregar lista de respostas rÃ¡pidas
+                    console.log('ðŸ”„ Recarregando lista de respostas rÃ¡pidas...');
+                    const container = document.getElementById('quick-replies-list');
+                    if (container) {
+                        container.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400">Carregando...</p>';
+                    }
+                    
+                    // Recarregar mÃºltiplas vezes para garantir
+                    await loadQuickRepliesAdmin();
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    await loadQuickRepliesAdmin(); // Recarregar novamente
+                    console.log('âœ… Lista de respostas rÃ¡pidas recarregada');
+                } catch (error) {
+                    console.error('âŒ Erro ao salvar resposta rÃ¡pida:', error);
+                    window.showSuccessToast(`Erro ao salvar resposta rÃ¡pida: ${error.message}`, true);
+                    window.addToLog(`Erro ao salvar resposta rÃ¡pida: ${error.message}`, true);
+                    await loadQuickRepliesAdmin();
+                }
+            });
+        }
+
+        // Carregar dados iniciais
+        loadUsersForAttendants();
+        
+        // ================================================
+        // ðŸ’¬ Habilitar/Desabilitar Chat
+        // ================================================
+        
+        // Carregar status do chat
+        async function loadChatStatus() {
+            try {
+                const status = await window.apiRequest('/api/status', 'GET');
+                const chatEnabled = status.chatEnabled !== false; // Default: true
+                updateChatStatusUI(chatEnabled);
+            } catch (error) {
+                console.error('Erro ao carregar status do chat:', error);
+                updateChatStatusUI(true); // Default: habilitado
+            }
+        }
+        
+        // Atualizar UI do status do chat
+        function updateChatStatusUI(enabled) {
+            const statusText = document.getElementById('chat-status-text');
+            const toggleBtn = document.getElementById('toggle-chat-enabled-btn');
+            
+            if (statusText) {
+                statusText.textContent = enabled ? 'Habilitado' : 'Desabilitado';
+                statusText.className = enabled ? 'text-green-600 dark:text-green-400 font-semibold' : 'text-red-600 dark:text-red-400 font-semibold';
+            }
+            
+            if (toggleBtn) {
+                toggleBtn.textContent = enabled ? 'âŒ Desabilitar Chat' : 'âœ… Habilitar Chat';
+                toggleBtn.className = enabled 
+                    ? 'px-4 py-2 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600'
+                    : 'px-4 py-2 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600';
+            }
+        }
+        
+        // Toggle chat enabled/disabled
+        const toggleChatEnabledBtn = document.getElementById('toggle-chat-enabled-btn');
+        if (toggleChatEnabledBtn) {
+            toggleChatEnabledBtn.addEventListener('click', async () => {
+                try {
+                    const status = await window.apiRequest('/api/status', 'GET');
+                    const currentStatus = status.chatEnabled !== false; // Default: true
+                    const newStatus = !currentStatus;
+                    
+                    await window.apiRequest('/api/admin/chat/enable', 'POST', { enabled: newStatus });
+                    updateChatStatusUI(newStatus);
+                    window.showSuccessToast(`Chat ${newStatus ? 'habilitado' : 'desabilitado'} com sucesso!`);
+                } catch (error) {
+                    console.error('Erro ao alterar status do chat:', error);
+                    window.showSuccessToast(`Erro ao alterar status do chat: ${error.message}`, true);
+                }
+            });
+        }
+        
+        // Carregar status inicial
+        loadChatStatus();
+        
+        // ================================================
+        // ðŸ’¬ Painel de Chat do Admin
+        // ================================================
+        
+        // VariÃ¡veis para busca de usuÃ¡rios no chat admin
+        let allUsersForChat = [];
+        let filteredUsersForChat = [];
+        
+        // Carregar usuÃ¡rios para o dropdown do chat admin
+        async function loadUsersForAdminChat() {
+            try {
+                const users = await window.apiRequest('/api/chat/users', 'GET');
+                if (Array.isArray(users)) {
+                    allUsersForChat = users;
+                    filteredUsersForChat = users;
+                    updateAdminChatUserSelect();
+                }
+            } catch (error) {
+                console.error('Erro ao carregar usuÃ¡rios para chat admin:', error);
+            }
+        }
+        
+        // Atualizar select de usuÃ¡rios do chat admin
+        function updateAdminChatUserSelect() {
+            const select = document.getElementById('admin-chat-user-select');
+            const searchInput = document.getElementById('admin-chat-user-search');
+            
+            if (select && Array.isArray(filteredUsersForChat)) {
+                select.innerHTML = '<option value="">Selecione um usuÃ¡rio...</option>' + 
+                    filteredUsersForChat.map(user => {
+                        const displayText = `${user.email}${user.whatsapp ? ' (' + user.whatsapp + ')' : ''}`;
+                        return `<option value="${user.id}">${displayText}</option>`;
+                    }).join('');
+                
+                // Mostrar select quando hÃ¡ resultados e busca ativa
+                if (filteredUsersForChat.length > 0 && searchInput && searchInput.value.trim()) {
+                    select.style.display = 'block';
+                    select.size = Math.min(filteredUsersForChat.length + 1, 8);
+                } else {
+                    select.style.display = 'none';
+                }
+            }
+        }
+        
+        // Buscar usuÃ¡rios no chat admin (serÃ¡ inicializado apÃ³s DOM estar pronto)
+        function initializeAdminChatUserSearch() {
+            const adminChatUserSearch = document.getElementById('admin-chat-user-search');
+            if (adminChatUserSearch) {
+                // Remover listeners antigos se existirem
+                const newSearch = adminChatUserSearch.cloneNode(true);
+                adminChatUserSearch.parentNode.replaceChild(newSearch, adminChatUserSearch);
+                
+                newSearch.addEventListener('input', (e) => {
+                    const searchTerm = e.target.value.trim().toLowerCase();
+                    
+                    if (searchTerm === '') {
+                        filteredUsersForChat = allUsersForChat;
+                        const select = document.getElementById('admin-chat-user-select');
+                        if (select) select.style.display = 'none';
+                    } else {
+                        filteredUsersForChat = allUsersForChat.filter(user => {
+                            const email = (user.email || '').toLowerCase();
+                            const whatsapp = (user.whatsapp || '').toLowerCase();
+                            return email.includes(searchTerm) || 
+                                   whatsapp.includes(searchTerm);
+                        });
+                        
+                        updateAdminChatUserSelect();
+                    }
+                });
+                
+                // Quando selecionar um usuÃ¡rio, atualizar o input
+                const select = document.getElementById('admin-chat-user-select');
+                if (select) {
+                    select.addEventListener('change', (e) => {
+                        const selectedUserId = e.target.value;
+                        if (selectedUserId) {
+                            const selectedUser = filteredUsersForChat.find(u => u.id == selectedUserId);
+                            if (selectedUser && newSearch) {
+                                newSearch.value = `${selectedUser.email}${selectedUser.whatsapp ? ' (' + selectedUser.whatsapp + ')' : ''}`;
+                                select.style.display = 'none';
+                            }
+                        }
+                    });
+                }
+                
+                // Fechar select ao clicar fora
+                document.addEventListener('click', (e) => {
+                    const select = document.getElementById('admin-chat-user-select');
+                    if (select && newSearch && 
+                        !select.contains(e.target) && 
+                        !newSearch.contains(e.target)) {
+                        select.style.display = 'none';
+                    }
+                });
+            }
+        }
+        
+        // Iniciar conversa com usuÃ¡rio selecionado
+        const adminStartChatBtn = document.getElementById('admin-start-chat-btn');
+        if (adminStartChatBtn) {
+            adminStartChatBtn.addEventListener('click', async () => {
+                const select = document.getElementById('admin-chat-user-select');
+                const searchInput = document.getElementById('admin-chat-user-search');
+                
+                // Tentar pegar do select primeiro, se nÃ£o tiver, buscar pelo texto do input
+                let userId = select?.value;
+                
+                if (!userId && searchInput && searchInput.value.trim()) {
+                    // Buscar usuÃ¡rio pelo texto digitado
+                    const searchTerm = searchInput.value.trim().toLowerCase();
+                    const foundUser = allUsersForChat.find(user => {
+                        const email = (user.email || '').toLowerCase();
+                        const whatsapp = (user.whatsapp || '').toLowerCase();
+                        const name = (user.name || '').toLowerCase();
+                        const displayText = `${email}${whatsapp ? ' (' + whatsapp + ')' : ''}`.toLowerCase();
+                        return email === searchTerm || 
+                               whatsapp === searchTerm || 
+                               name === searchTerm ||
+                               displayText === searchTerm ||
+                               displayText.includes(searchTerm);
+                    });
+                    
+                    if (foundUser) {
+                        userId = foundUser.id;
+                    }
+                }
+                
+                if (!userId) {
+                    window.showSuccessToast('Selecione ou busque um usuÃ¡rio primeiro', true);
+                    return;
+                }
+                
+                try {
+                    const conversation = await window.apiRequest('/api/chat/start-conversation', 'POST', { targetUserId: parseInt(userId) });
+                    if (conversation && conversation.id) {
+                        adminCurrentConversationId = conversation.id;
+                        adminCurrentUserId = parseInt(userId);
+                        
+                        // Criar ticket automaticamente ao iniciar conversa
+                        try {
+                            // Gerar nÃºmero do ticket amigÃ¡vel (TKT-YYYY-MM-DD-001)
+                            const now = new Date();
+                            const year = now.getFullYear();
+                            const month = String(now.getMonth() + 1).padStart(2, '0');
+                            const day = String(now.getDate()).padStart(2, '0');
+                            const dateStr = `${year}-${month}-${day}`;
+                            
+                            // Buscar Ãºltimo ticket do dia para gerar nÃºmero sequencial
+                            const tickets = await window.apiRequest('/api/chat/tickets', 'GET');
+                            let sequence = 1;
+                            if (Array.isArray(tickets)) {
+                                const todayTickets = tickets.filter(t => 
+                                    t.ticket_number && t.ticket_number.startsWith(`TKT-${dateStr}-`)
+                                );
+                                if (todayTickets.length > 0) {
+                                    const lastTicket = todayTickets.sort((a, b) => {
+                                        const matchA = a.ticket_number.match(/TKT-\d{4}-\d{2}-\d{2}-(\d+)/);
+                                        const matchB = b.ticket_number.match(/TKT-\d{4}-\d{2}-\d{2}-(\d+)/);
+                                        const numA = matchA && matchA[1] ? parseInt(matchA[1]) : 0;
+                                        const numB = matchB && matchB[1] ? parseInt(matchB[1]) : 0;
+                                        return numB - numA;
+                                    })[0];
+                                    if (lastTicket) {
+                                        const match = lastTicket.ticket_number.match(/TKT-\d{4}-\d{2}-\d{2}-(\d+)/);
+                                        if (match && match[1]) {
+                                            sequence = parseInt(match[1]) + 1;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            const ticketNumber = `TKT-${dateStr}-${String(sequence).padStart(3, '0')}`;
+                            const ticketResult = await window.apiRequest('/api/chat/tickets', 'POST', {
+                                ticket_number: ticketNumber,
+                                conversation_id: conversation.id,
+                                user_id: parseInt(userId),
+                                attendant_id: window.appState.currentUser.id,
+                                status: 'open',
+                                priority: 'normal'
+                            });
+                            if (ticketResult && ticketResult.id) {
+                                adminCurrentTicketId = ticketResult.id;
+                                
+                                const ticketNumberEl = document.getElementById('admin-chat-ticket-number');
+                                const closeTicketBtn = document.getElementById('admin-chat-close-ticket-btn');
+                                if (ticketNumberEl) {
+                                    ticketNumberEl.textContent = `Ticket ${ticketNumber}`;
+                                    ticketNumberEl.classList.remove('hidden');
+                                }
+                                if (closeTicketBtn) closeTicketBtn.classList.remove('hidden');
+                                
+                                // Atualizar painel de tickets
+                                if (typeof loadTicketsPanel === 'function') {
+                                    loadTicketsPanel();
+                                }
+                            }
+                        } catch (ticketError) {
+                            console.error('Erro ao criar ticket:', ticketError);
+                        }
+                        
+                        // Mostrar container de chat
+                        const container = document.getElementById('admin-chat-container');
+                        const userName = document.getElementById('admin-chat-user-name');
+                        if (container) container.classList.remove('hidden');
+                        if (userName) {
+                            const user = await window.apiRequest(`/api/user/${userId}/details`, 'GET');
+                            userName.textContent = user.email || 'UsuÃ¡rio';
+                        }
+                        
+                        // Carregar mensagens
+                        await loadAdminChatMessages(conversation.id);
+                    }
+                } catch (error) {
+                    console.error('Erro ao iniciar conversa:', error);
+                    window.showSuccessToast('Erro ao iniciar conversa', true);
+                }
+            });
+        }
+        
+        // Acesso remoto
+        const adminRemoteAccessBtn = document.getElementById('admin-remote-access-btn');
+        if (adminRemoteAccessBtn) {
+            adminRemoteAccessBtn.addEventListener('click', async () => {
+                // Usar usuÃ¡rio da conversa atual ou buscar do select
+                let userId = adminCurrentUserId;
+                if (!userId) {
+                    const select = document.getElementById('admin-chat-user-select');
+                    userId = select?.value;
+                }
+                
+                if (!userId) {
+                    window.showSuccessToast('Selecione um usuÃ¡rio primeiro ou abra uma conversa', true);
+                    return;
+                }
+                
+                try {
+                    // Armazenar o userId para usar quando receber a resposta
+                    adminCurrentUserId = parseInt(userId);
+                    
+                    // Enviar comando de acesso remoto via WebSocket
+                    if (window.chatSocket && window.chatSocket.connected) {
+                        window.chatSocket.emit('remote-access-request', {
+                            userId: parseInt(userId),
+                            action: 'view-screen',
+                            data: {}
+                        });
+                        window.showSuccessToast('SolicitaÃ§Ã£o de acesso remoto enviada! Aguardando aprovaÃ§Ã£o do usuÃ¡rio...');
+                    } else {
+                        // Fallback para API
+                        await window.apiRequest('/api/chat/remote-access', 'POST', {
+                            userId: parseInt(userId),
+                            action: 'navigate',
+                            data: { section: 'home' }
+                        });
+                        window.showSuccessToast('Comando de acesso remoto enviado!');
+                    }
+                } catch (error) {
+                    console.error('Erro ao enviar comando remoto:', error);
+                    window.showSuccessToast('Erro ao enviar comando remoto', true);
+                }
+            });
+        }
+        
+        // VariÃ¡vel global para controle de acesso remoto do atendente
+        let remoteViewerActive = false;
+        let remoteViewerContainer = null;
+        
+        // Escutar resposta de acesso remoto (atendente)
+        if (window.chatSocket) {
+            window.chatSocket.on('remote-access-response', (data) => {
+                console.log('ðŸ”§ [REMOTE] Resposta de acesso remoto recebida:', data);
+                if (data.accepted) {
+                    window.showSuccessToast(`Acesso remoto permitido pelo usuÃ¡rio ${data.userId}`);
+                    // Armazenar o userId para usar nas atualizaÃ§Ãµes de tela
+                    adminCurrentUserId = data.userId;
+                    // Iniciar visualizaÃ§Ã£o remota
+                    startRemoteViewing(data.userId);
+                } else {
+                    window.showSuccessToast('Acesso remoto recusado pelo usuÃ¡rio', true);
+                }
+            });
+            
+            // Escutar atualizaÃ§Ãµes de tela do usuÃ¡rio
+            window.chatSocket.on('remote-screen-update', (data) => {
+                console.log('ðŸ“º [REMOTE] Recebendo atualizaÃ§Ã£o de tela:', data);
+                // Se o visualizador estÃ¡ ativo, atualizar a tela
+                // Verificar se Ã© o usuÃ¡rio que estamos visualizando OU se nÃ£o temos um usuÃ¡rio especÃ­fico
+                if (remoteViewerActive) {
+                    // Se temos um adminCurrentUserId, verificar se Ã© o mesmo
+                    // Se nÃ£o temos, aceitar qualquer atualizaÃ§Ã£o
+                    if (!adminCurrentUserId || data.userId === adminCurrentUserId) {
+                        updateRemoteScreen(data.image);
+                    }
+                }
+            });
+            
+            // Escutar fim de compartilhamento
+            window.chatSocket.on('remote-screen-end', (data) => {
+                if (data.userId === adminCurrentUserId) {
+                    stopRemoteViewing();
+                }
+            });
+        }
+        
+        // Iniciar visualizaÃ§Ã£o remota
+        function startRemoteViewing(userId) {
+            remoteViewerActive = true;
+            
+            // Criar container para visualizaÃ§Ã£o remota
+            if (!remoteViewerContainer) {
+                remoteViewerContainer = document.createElement('div');
+                remoteViewerContainer.id = 'remote-viewer-container';
+                remoteViewerContainer.className = 'fixed inset-0 bg-black z-[10009] flex flex-col';
+                remoteViewerContainer.innerHTML = `
+                    <div class="bg-gray-800 text-white p-4 flex items-center justify-between">
+                        <h3 class="text-lg font-semibold">ðŸ” Acesso Remoto Ativo - UsuÃ¡rio ID: ${userId}</h3>
+                        <button id="close-remote-viewer" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg">
+                            Encerrar Acesso
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-auto bg-gray-900 flex items-center justify-center p-4">
+                        <img id="remote-screen-image" src="" alt="Tela do usuÃ¡rio" class="max-w-full max-h-full object-contain border border-gray-700 rounded">
+                    </div>
+                    <div class="bg-gray-800 text-white p-4 text-sm border-t border-gray-700">
+                        <p class="text-center">ðŸ“º VocÃª estÃ¡ visualizando a tela do usuÃ¡rio em tempo real. Use o chat para se comunicar.</p>
+                    </div>
+                `;
+                document.body.appendChild(remoteViewerContainer);
+                
+                // Event listener para fechar
+                const closeBtn = document.getElementById('close-remote-viewer');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => {
+                        stopRemoteViewing();
+                        if (window.chatSocket && adminCurrentUserId) {
+                            window.chatSocket.emit('remote-access-end', { userId: adminCurrentUserId });
+                        }
+                    });
+                }
+            }
+        }
+        
+        // Atualizar tela remota
+        function updateRemoteScreen(imageData) {
+            const img = document.getElementById('remote-screen-image');
+            if (img) {
+                img.src = imageData;
+            }
+        }
+        
+        // Parar visualizaÃ§Ã£o remota
+        function stopRemoteViewing() {
+            remoteViewerActive = false;
+            if (remoteViewerContainer) {
+                remoteViewerContainer.remove();
+                remoteViewerContainer = null;
+            }
+        }
+        
+        // Enviar comando remoto (clique, digitaÃ§Ã£o, etc)
+        function sendRemoteCommand(command) {
+            if (window.chatSocket && window.chatSocket.connected && adminCurrentUserId) {
+                window.chatSocket.emit('remote-command-send', {
+                    targetUserId: adminCurrentUserId,
+                    command: command
+                });
+            }
+        }
+        
+        // Fechar chat admin
+        const adminCloseChatBtn = document.getElementById('admin-close-chat-btn');
+        if (adminCloseChatBtn) {
+            adminCloseChatBtn.addEventListener('click', async () => {
+                // Fechar ticket automaticamente se existir
+                if (adminCurrentTicketId && adminCurrentConversationId) {
+                    try {
+                        await window.apiRequest(`/api/chat/tickets/${adminCurrentTicketId}/close`, 'POST', { 
+                            notes: 'Conversa fechada pelo atendente' 
+                        });
+                        window.showSuccessToast('Ticket fechado automaticamente');
+                    } catch (error) {
+                        console.error('Erro ao fechar ticket:', error);
+                    }
+                }
+                
+                const container = document.getElementById('admin-chat-container');
+                if (container) container.classList.add('hidden');
+                adminCurrentConversationId = null;
+                adminCurrentUserId = null;
+                adminCurrentTicketId = null;
+                
+                // Atualizar painel de tickets
+                if (typeof loadTicketsPanel === 'function') {
+                    loadTicketsPanel();
+                }
+            });
+        }
+        
+        // Enviar mensagem do admin
+        const adminChatForm = document.getElementById('admin-chat-form');
+        if (adminChatForm) {
+            adminChatForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const input = document.getElementById('admin-chat-input');
+                const message = input?.value.trim();
+                if (message && adminCurrentConversationId) {
+                    input.value = '';
+                    try {
+                        await window.apiRequest('/api/chat/send', 'POST', {
+                            conversationId: adminCurrentConversationId,
+                            message,
+                            messageType: 'text'
+                        });
+                        await loadAdminChatMessages(adminCurrentConversationId);
+                    } catch (error) {
+                        console.error('Erro ao enviar mensagem:', error);
+                        window.showSuccessToast('Erro ao enviar mensagem', true);
+                    }
+                }
+            });
+        }
+        
+        // VariÃ¡veis globais para chat admin
+        let adminCurrentConversationId = null;
+        let adminCurrentUserId = null;
+        
+        // Carregar mensagens do chat admin
+        async function loadAdminChatMessages(conversationId) {
+            try {
+                console.log('ðŸ“¥ [ADMIN] Carregando mensagens da conversa:', conversationId);
+                const messages = await window.apiRequest(`/api/chat/messages/${conversationId}`, 'GET');
+                const container = document.getElementById('admin-chat-messages');
+                if (container && Array.isArray(messages)) {
+                    container.innerHTML = messages.map(msg => {
+                        const isOwn = msg.sender_id === window.appState.currentUser.id;
+                        const time = new Date(msg.created_at || msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                        const messageText = msg.message_text || msg.message || '';
+                        const messageType = msg.message_type || 'text';
+                        const fileUrl = msg.file_url;
+                        
+                        let contentHtml = '';
+                        if (fileUrl) {
+                            if (messageType === 'image') {
+                                contentHtml = `<img src="${fileUrl}" alt="${escapeHtml(messageText)}" class="max-w-full rounded-lg mb-1" onclick="window.open('${fileUrl}', '_blank')" style="cursor: pointer;">`;
+                            } else if (messageType === 'audio') {
+                                contentHtml = `<audio controls class="w-full"><source src="${fileUrl}" type="audio/mpeg">Seu navegador nÃ£o suporta Ã¡udio.</audio>`;
+                            } else if (messageType === 'video') {
+                                contentHtml = `<video controls class="max-w-full rounded-lg"><source src="${fileUrl}" type="video/mp4">Seu navegador nÃ£o suporta vÃ­deo.</video>`;
+                            } else {
+                                contentHtml = `<a href="${fileUrl}" target="_blank" class="text-blue-600 hover:underline">ðŸ“Ž ${escapeHtml(messageText || 'Arquivo')}</a>`;
+                            }
+                        }
+                        
+                        if (messageText && !fileUrl) {
+                            contentHtml += `<p class="text-sm ${isOwn ? 'text-gray-900' : 'text-gray-800 dark:text-gray-100'} whitespace-pre-wrap break-words">${escapeHtml(messageText)}</p>`;
+                        }
+                        
+                        // Checkmarks de visto (WhatsApp style)
+                        let readStatusHtml = '';
+                        if (isOwn) {
+                            // Se a mensagem foi enviada pelo atendente, verificar se foi lida pelo usuÃ¡rio
+                            const isRead = msg.is_read_by_user === 1 || msg.is_read === 1;
+                            if (isRead) {
+                                // 2 tics verdes (visualizado)
+                                readStatusHtml = '<span class="inline-flex items-center"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 text-green-500 -ml-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg></span>';
+                            } else {
+                                // 1 tic azul (enviado)
+                                readStatusHtml = '<svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>';
+                            }
+                        }
+                        
+                        return `
+                            <div class="flex ${isOwn ? 'justify-end' : 'justify-start'} mb-1">
+                                <div class="max-w-[70%] ${isOwn ? 'bg-[#dcf8c6]' : 'bg-white dark:bg-gray-700'} rounded-lg shadow-sm ${isOwn ? 'rounded-tr-none' : 'rounded-tl-none'} px-3 py-2">
+                                    ${contentHtml}
+                                    <div class="flex items-center justify-end gap-1 mt-1">
+                                        <span class="text-[10px] text-gray-500 dark:text-gray-400">${time}</span>
+                                        ${readStatusHtml}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                    container.scrollTop = container.scrollHeight;
+                    console.log(`âœ… [ADMIN] ${messages.length} mensagem(ns) carregada(s)`);
+                } else {
+                    console.warn('âš ï¸ [ADMIN] Container nÃ£o encontrado ou mensagens nÃ£o sÃ£o array');
+                }
+            } catch (error) {
+                console.error('âŒ [ADMIN] Erro ao carregar mensagens:', error);
+            }
+        }
+        
+        // Carregar fila de atendimento
+        async function loadQueue() {
+            // Verificar se o usuÃ¡rio estÃ¡ logado e Ã© admin/atendente
+            const token = localStorage.getItem('authToken');
+            if (!token || !window.appState.currentUser || (window.appState.currentUser.role !== 'admin' && window.appState.currentUser.role !== 'attendant')) {
+                return;
+            }
+            
+            try {
+                const queue = await window.apiRequest('/api/chat/queue', 'GET');
+                const countEl = document.getElementById('admin-queue-count');
+                const listEl = document.getElementById('admin-queue-list');
+                
+                if (countEl) {
+                    const count = Array.isArray(queue) ? queue.length : 0;
+                    countEl.textContent = `${count} usuÃ¡rio(s) aguardando`;
+                }
+                
+                if (listEl && Array.isArray(queue) && queue.length > 0) {
+                    listEl.innerHTML = queue.map((item, index) => `
+                        <div class="p-2 bg-white dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 flex items-center justify-between">
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-gray-900 dark:text-gray-100">${item.email || 'UsuÃ¡rio'}</p>
+                                <p class="text-xs text-gray-500 dark:text-gray-400">PosiÃ§Ã£o: ${item.position || index + 1}</p>
+                            </div>
+                            <button data-queue-id="${item.id}" class="accept-queue-btn px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded">
+                                Atender
+                            </button>
+                        </div>
+                    `).join('');
+                    
+                    // Adicionar event listeners aos botÃµes
+                    listEl.querySelectorAll('.accept-queue-btn').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            const queueId = parseInt(btn.dataset.queueId);
+                            if (queueId) {
+                                acceptFromQueue(queueId);
+                            }
+                        });
+                    });
+                } else if (listEl) {
+                    listEl.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 text-center">Nenhum usuÃ¡rio na fila</p>';
+                }
+            } catch (error) {
+                // Ignorar erros silenciosamente se nÃ£o estiver autenticado
+                if (error.message && error.message.includes('token')) {
+                    return;
+                }
+                console.error('Erro ao carregar fila:', error);
+            }
+        }
+        
+        // Aceitar da fila
+        window.acceptFromQueue = async function(queueId) {
+            try {
+                const result = await window.apiRequest('/api/chat/queue/accept', 'POST', { queueId });
+                if (result && result.conversation) {
+                    adminCurrentConversationId = result.conversation.id;
+                    adminCurrentUserId = result.conversation.user_id;
+                    adminCurrentTicketId = result.ticket.id;
+                    
+                    // Mostrar chat
+                    const container = document.getElementById('admin-chat-container');
+                    if (container) container.classList.remove('hidden');
+                    
+                    // Atualizar UI
+                    const ticketNumber = document.getElementById('admin-chat-ticket-number');
+                    const closeTicketBtn = document.getElementById('admin-chat-close-ticket-btn');
+                    const userName = document.getElementById('admin-chat-user-name');
+                    
+                    if (ticketNumber) {
+                        ticketNumber.textContent = `Ticket ${result.ticket.ticket_number}`;
+                        ticketNumber.classList.remove('hidden');
+                    }
+                    if (closeTicketBtn) closeTicketBtn.classList.remove('hidden');
+                    
+                    // Atualizar nome do usuÃ¡rio com email
+                    if (userName && result.ticket.user_email) {
+                        userName.textContent = result.ticket.user_email;
+                    } else if (userName) {
+                        // Buscar email do usuÃ¡rio se nÃ£o vier no ticket
+                        try {
+                            const user = await window.apiRequest(`/api/user/${result.conversation.user_id}/details`, 'GET');
+                            if (user && user.email) {
+                                userName.textContent = user.email;
+                            }
+                        } catch (error) {
+                            console.error('Erro ao buscar email do usuÃ¡rio:', error);
+                        }
+                    }
+                    
+                    // Carregar mensagens da conversa ANTES de qualquer outra coisa
+                    console.log('ðŸ“¥ [ADMIN] Carregando mensagens da conversa:', result.conversation.id);
+                    await loadAdminChatMessages(result.conversation.id);
+                    
+                    // Aguardar um pouco para garantir que as mensagens foram carregadas
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    
+                    // Conectar ao socket da conversa para receber mensagens em tempo real
+                    if (window.chatSocket && window.chatSocket.connected) {
+                        window.chatSocket.emit('join-conversation', { conversationId: result.conversation.id });
+                        console.log('âœ… [ADMIN] Conectado Ã  sala da conversa via WebSocket');
+                    }
+                    
+                    // Marcar mensagens como lidas pelo atendente
+                    try {
+                        await window.apiRequest(`/api/chat/conversations/${result.conversation.id}/read`, 'POST', {});
+                        console.log('âœ… [ADMIN] Mensagens marcadas como lidas');
+                    } catch (error) {
+                        console.error('Erro ao marcar mensagens como lidas:', error);
+                    }
+                    
+                    // Scroll para o final das mensagens
+                    const messagesContainer = document.getElementById('admin-chat-messages');
+                    if (messagesContainer) {
+                        setTimeout(() => {
+                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        }, 500);
+                    }
+                    
+                    // Atualizar fila
+                    await loadQueue();
+                    
+                    // Atualizar painel de tickets
+                    if (typeof loadTicketsPanel === 'function') {
+                        loadTicketsPanel();
+                    }
+                    
+                    window.showSuccessToast('UsuÃ¡rio aceito da fila! Ticket criado automaticamente.');
+                }
+            } catch (error) {
+                console.error('Erro ao aceitar da fila:', error);
+                window.showSuccessToast('Erro ao aceitar da fila', true);
+            }
+        };
+        
+        // BotÃ£o de atualizar fila
+        const refreshQueueBtn = document.getElementById('admin-refresh-queue-btn');
+        if (refreshQueueBtn) {
+            refreshQueueBtn.addEventListener('click', loadQueue);
+        }
+        
+        // BotÃ£o de broadcast
+        const broadcastBtn = document.getElementById('admin-broadcast-btn');
+        if (broadcastBtn) {
+            broadcastBtn.addEventListener('click', async () => {
+                const message = prompt('Digite a mensagem para enviar para todos os usuÃ¡rios:');
+                if (message) {
+                    try {
+                        const result = await window.apiRequest('/api/chat/broadcast', 'POST', { message });
+                        window.showSuccessToast(`Mensagem enviada para ${result.successCount} usuÃ¡rio(s)!`);
+                    } catch (error) {
+                        console.error('Erro ao enviar broadcast:', error);
+                        window.showSuccessToast('Erro ao enviar broadcast', true);
+                    }
+                }
+            });
+        }
+        
+        // BotÃ£o de fechar ticket
+        const closeTicketBtn = document.getElementById('admin-chat-close-ticket-btn');
+        if (closeTicketBtn) {
+            closeTicketBtn.addEventListener('click', async () => {
+                if (!adminCurrentTicketId) return;
+                
+                const notes = prompt('ObservaÃ§Ãµes (opcional):');
+                try {
+                    await window.apiRequest(`/api/chat/tickets/${adminCurrentTicketId}/close`, 'POST', { notes });
+                    window.showSuccessToast('Ticket fechado!');
+                    
+                    const ticketNumber = document.getElementById('admin-chat-ticket-number');
+                    const closeBtn = document.getElementById('admin-chat-close-ticket-btn');
+                    if (ticketNumber) ticketNumber.classList.add('hidden');
+                    if (closeBtn) closeBtn.classList.add('hidden');
+                    
+                    adminCurrentTicketId = null;
+                    
+                    // Atualizar painel de tickets
+                    if (typeof loadTicketsPanel === 'function') {
+                        loadTicketsPanel();
+                    }
+                } catch (error) {
+                    console.error('Erro ao fechar ticket:', error);
+                    window.showSuccessToast('Erro ao fechar ticket', true);
+                }
+            });
+        }
+        
+        // BotÃ£o de anexar no chat admin
+        const adminAttachBtn = document.getElementById('admin-chat-attach-btn');
+        const adminFileInput = document.getElementById('admin-chat-file-input');
+        if (adminAttachBtn && adminFileInput) {
+            adminAttachBtn.addEventListener('click', () => adminFileInput.click());
+            adminFileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (file && adminCurrentConversationId) {
+                    try {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        formData.append('conversationId', adminCurrentConversationId);
+                        formData.append('messageType', file.type.startsWith('image/') ? 'image' : 
+                                                      file.type.startsWith('audio/') ? 'audio' : 
+                                                      file.type.startsWith('video/') ? 'video' : 'file');
+                        
+                        const token = localStorage.getItem('authToken');
+                        await fetch('/api/chat/send-file', {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` },
+                            body: formData
+                        });
+                        
+                        await loadAdminChatMessages(adminCurrentConversationId);
+                        adminFileInput.value = '';
+                    } catch (error) {
+                        console.error('Erro ao enviar arquivo:', error);
+                        window.showSuccessToast('Erro ao enviar arquivo', true);
+                    }
+                }
+            });
+        }
+        
+        // BotÃ£o de resposta rÃ¡pida no chat admin
+        const adminQuickReplyBtn = document.getElementById('admin-chat-quick-reply-btn');
+        if (adminQuickReplyBtn) {
+            adminQuickReplyBtn.addEventListener('click', async () => {
+                try {
+                    const quickReplies = await window.apiRequest('/api/chat/quick-replies', 'GET');
+                    if (Array.isArray(quickReplies) && quickReplies.length > 0) {
+                        const selected = prompt(`Respostas rÃ¡pidas disponÃ­veis:\n${quickReplies.map((r, i) => `${i + 1}. ${r.title}`).join('\n')}\n\nDigite o nÃºmero:`);
+                        const index = parseInt(selected) - 1;
+                        if (index >= 0 && index < quickReplies.length) {
+                            const reply = quickReplies[index];
+                            const input = document.getElementById('admin-chat-input');
+                            if (input) {
+                                input.value = reply.message;
+                                input.focus();
+                            }
+                        }
+                    } else {
+                        window.showSuccessToast('Nenhuma resposta rÃ¡pida disponÃ­vel', true);
+                    }
+                } catch (error) {
+                    console.error('Erro ao carregar respostas rÃ¡pidas:', error);
+                }
+            });
+        }
+        
+        // BotÃ£o de transferir no chat admin
+        const adminTransferBtn = document.getElementById('admin-chat-transfer-btn');
+        const transferModal = document.getElementById('transfer-chat-modal');
+        const closeTransferModal = document.getElementById('close-transfer-modal');
+        const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
+        const transferAttendantsList = document.getElementById('transfer-attendants-list');
+        
+        function showTransferModal() {
+            if (!adminCurrentConversationId || !adminCurrentUserId) {
+                window.showSuccessToast('Nenhuma conversa ativa para transferir', true);
+                return;
+            }
+            if (transferModal) transferModal.style.display = 'flex';
+            loadTransferAttendants();
+        }
+        
+        function hideTransferModal() {
+            if (transferModal) transferModal.style.display = 'none';
+        }
+        
+        async function loadTransferAttendants() {
+            try {
+                const attendants = await window.apiRequest('/api/chat/attendants', 'GET');
+                if (transferAttendantsList) {
+                    if (Array.isArray(attendants) && attendants.length > 0) {
+                        transferAttendantsList.innerHTML = attendants.map(att => `
+                            <button data-attendant-id="${att.user_id}" class="transfer-attendant-btn w-full p-3 text-left bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg border border-gray-200 dark:border-gray-600 transition-colors">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="font-medium text-gray-900 dark:text-gray-100">${att.email}</p>
+                                        <p class="text-xs text-gray-500 dark:text-gray-400">${att.is_online ? 'ðŸŸ¢ Online' : 'ðŸ”´ Offline'}</p>
+                                    </div>
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </div>
+                            </button>
+                        `).join('');
+                        
+                        // Adicionar event listeners
+                        transferAttendantsList.querySelectorAll('.transfer-attendant-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const targetAttendantId = parseInt(btn.dataset.attendantId);
+                                await transferConversation(targetAttendantId);
+                            });
+                        });
+                    } else {
+                        transferAttendantsList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 text-center">Nenhum atendente disponÃ­vel</p>';
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao carregar atendentes:', error);
+            }
+        }
+        
+        async function transferConversation(targetAttendantId) {
+            try {
+                // Transferir conversa
+                await window.apiRequest('/api/chat/conversations/transfer', 'POST', {
+                    conversationId: adminCurrentConversationId,
+                    targetAttendantId: targetAttendantId,
+                    returnToQueue: true // Flag para retornar Ã  fila
+                });
+                
+                window.showSuccessToast('Conversa transferida! UsuÃ¡rio retornou Ã  fila.');
+                
+                // Fechar chat atual
+                const container = document.getElementById('admin-chat-container');
+                if (container) container.classList.add('hidden');
+                adminCurrentConversationId = null;
+                adminCurrentUserId = null;
+                adminCurrentTicketId = null;
+                
+                // Atualizar fila
+                await loadQueue();
+                hideTransferModal();
+            } catch (error) {
+                console.error('Erro ao transferir:', error);
+                window.showSuccessToast('Erro ao transferir conversa', true);
+            }
+        }
+        
+        if (adminTransferBtn) {
+            adminTransferBtn.addEventListener('click', showTransferModal);
+        }
+        if (closeTransferModal) {
+            closeTransferModal.addEventListener('click', hideTransferModal);
+        }
+        if (cancelTransferBtn) {
+            cancelTransferBtn.addEventListener('click', hideTransferModal);
+        }
+        if (transferModal) {
+            transferModal.addEventListener('click', (e) => {
+                if (e.target === transferModal) hideTransferModal();
+            });
+        }
+        
+        // VariÃ¡veis de paginaÃ§Ã£o de tickets
+        let ticketsCurrentPage = 1;
+        const ticketsPerPage = 5;
+        
+        // Carregar painel de tickets
+        async function loadTicketsPanel(page = 1) {
+            try {
+                const tickets = await window.apiRequest('/api/chat/tickets', 'GET');
+                const ticketsList = document.getElementById('tickets-list');
+                const statusFilter = document.getElementById('ticket-status-filter')?.value || 'all';
+                const searchInput = document.getElementById('ticket-search-input')?.value || '';
+                
+                if (!Array.isArray(tickets)) return;
+                
+                // Filtrar tickets
+                let filteredTickets = tickets;
+                
+                // Filtrar por status
+                if (statusFilter !== 'all') {
+                    filteredTickets = filteredTickets.filter(t => t.status === statusFilter);
+                }
+                
+                // Filtrar por busca
+                if (searchInput.trim()) {
+                    const searchTerm = searchInput.trim().toLowerCase();
+                    filteredTickets = filteredTickets.filter(t => 
+                        t.ticket_number?.toLowerCase().includes(searchTerm) ||
+                        t.user_email?.toLowerCase().includes(searchTerm) ||
+                        t.attendant_email?.toLowerCase().includes(searchTerm)
+                    );
+                }
+                
+                // Ordenar por data de criaÃ§Ã£o (mais recentes primeiro)
+                filteredTickets.sort((a, b) => {
+                    const dateA = new Date(a.created_at);
+                    const dateB = new Date(b.created_at);
+                    return dateB - dateA;
+                });
+                
+                // Atualizar estatÃ­sticas (usando todos os tickets, nÃ£o apenas filtrados)
+                const openCount = tickets.filter(t => t.status === 'open').length;
+                const closedCount = tickets.filter(t => t.status === 'closed').length;
+                const totalCount = tickets.length;
+                
+                const openCountEl = document.getElementById('tickets-open-count');
+                const closedCountEl = document.getElementById('tickets-closed-count');
+                const totalCountEl = document.getElementById('tickets-total-count');
+                
+                if (openCountEl) openCountEl.textContent = openCount;
+                if (closedCountEl) closedCountEl.textContent = closedCount;
+                if (totalCountEl) totalCountEl.textContent = totalCount;
+                
+                // PaginaÃ§Ã£o
+                const totalPages = Math.ceil(filteredTickets.length / ticketsPerPage);
+                ticketsCurrentPage = Math.min(page, totalPages || 1);
+                const startIndex = (ticketsCurrentPage - 1) * ticketsPerPage;
+                const endIndex = startIndex + ticketsPerPage;
+                const paginatedTickets = filteredTickets.slice(startIndex, endIndex);
+                
+                // Renderizar lista
+                if (ticketsList) {
+                    if (paginatedTickets.length > 0) {
+                        ticketsList.innerHTML = paginatedTickets.map(ticket => {
+                            const createdDate = new Date(ticket.created_at).toLocaleString('pt-BR');
+                            const closedDate = ticket.closed_at ? new Date(ticket.closed_at).toLocaleString('pt-BR') : null;
+                            const statusColor = ticket.status === 'open' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+                            
+                            return `
+                                <div class="p-4 bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 hover:shadow-md transition-shadow">
+                                    <div class="flex items-start justify-between">
+                                        <div class="flex-1">
+                                            <div class="flex items-center gap-2 mb-2">
+                                                <span class="font-mono text-sm font-semibold text-gray-900 dark:text-gray-100">${ticket.ticket_number}</span>
+                                                <span class="px-2 py-1 text-xs rounded ${statusColor}">${ticket.status === 'open' ? 'Aberto' : 'Fechado'}</span>
+                                            </div>
+                                            <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                                                <span class="font-medium">UsuÃ¡rio:</span> ${ticket.user_email || 'N/A'}
+                                            </p>
+                                            ${ticket.attendant_email ? `
+                                                <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                                                    <span class="font-medium">Atendente:</span> ${ticket.attendant_email}
+                                                </p>
+                                            ` : ''}
+                                            <p class="text-xs text-gray-500 dark:text-gray-500">
+                                                Criado em: ${createdDate}
+                                                ${closedDate ? ` | Fechado em: ${closedDate}` : ''}
+                                            </p>
+                                            ${ticket.notes ? `
+                                                <p class="text-sm text-gray-600 dark:text-gray-400 mt-2 italic">
+                                                    ObservaÃ§Ãµes: ${ticket.notes}
+                                                </p>
+                                            ` : ''}
+                                        </div>
+                                        <button data-ticket-id="${ticket.id}" class="view-ticket-btn ml-4 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded">
+                                            Ver Detalhes
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                        
+                        // Adicionar event listeners
+                        ticketsList.querySelectorAll('.view-ticket-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const ticketId = parseInt(btn.dataset.ticketId);
+                                viewTicketDetails(ticketId);
+                            });
+                        });
+                        
+                        // Adicionar controles de paginaÃ§Ã£o
+                        const paginationContainer = document.getElementById('tickets-pagination');
+                        if (paginationContainer) {
+                            if (totalPages > 1) {
+                                let paginationHtml = '<div class="flex items-center justify-center gap-2 mt-4">';
+                                
+                                // BotÃ£o anterior
+                                if (ticketsCurrentPage > 1) {
+                                    paginationHtml += `<button data-ticket-page="${ticketsCurrentPage - 1}" class="ticket-page-btn px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded text-gray-700 dark:text-gray-300">Anterior</button>`;
+                                }
+                                
+                                // NÃºmeros de pÃ¡gina
+                                for (let i = 1; i <= totalPages; i++) {
+                                    if (i === 1 || i === totalPages || (i >= ticketsCurrentPage - 1 && i <= ticketsCurrentPage + 1)) {
+                                        paginationHtml += `<button data-ticket-page="${i}" class="ticket-page-btn px-3 py-1 text-sm ${i === ticketsCurrentPage ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300'} rounded">${i}</button>`;
+                                    } else if (i === ticketsCurrentPage - 2 || i === ticketsCurrentPage + 2) {
+                                        paginationHtml += '<span class="px-2 text-gray-500">...</span>';
+                                    }
+                                }
+                                
+                                // BotÃ£o prÃ³ximo
+                                if (ticketsCurrentPage < totalPages) {
+                                    paginationHtml += `<button data-ticket-page="${ticketsCurrentPage + 1}" class="ticket-page-btn px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded text-gray-700 dark:text-gray-300">PrÃ³ximo</button>`;
+                                }
+                                
+                                paginationHtml += `</div><p class="text-xs text-gray-500 dark:text-gray-400 text-center mt-2">PÃ¡gina ${ticketsCurrentPage} de ${totalPages} (${filteredTickets.length} ticket(s))</p>`;
+                                paginationContainer.innerHTML = paginationHtml;
+                                
+                                // Adicionar event listeners aos botÃµes de paginaÃ§Ã£o
+                                paginationContainer.querySelectorAll('.ticket-page-btn').forEach(btn => {
+                                    btn.addEventListener('click', (e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const page = parseInt(btn.getAttribute('data-ticket-page'));
+                                        if (page && page > 0 && page <= totalPages) {
+                                            loadTicketsPanel(page);
+                                        }
+                                    });
+                                });
+                            } else {
+                                paginationContainer.innerHTML = '';
+                            }
+                        }
+                    } else {
+                        ticketsList.innerHTML = '<p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">Nenhum ticket encontrado</p>';
+                        const paginationContainer = document.getElementById('tickets-pagination');
+                        if (paginationContainer) paginationContainer.innerHTML = '';
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao carregar tickets:', error);
+            }
+        }
+        
+        // FunÃ§Ã£o global para carregar pÃ¡gina de tickets
+        window.loadTicketsPage = function(page) {
+            loadTicketsPanel(page);
+        };
+        
+        async function viewTicketDetails(ticketId) {
+            try {
+                const tickets = await window.apiRequest('/api/chat/tickets', 'GET');
+                const ticket = tickets.find(t => t.id === ticketId);
+                if (ticket && ticket.conversation_id) {
+                    // Abrir conversa relacionada
+                    adminCurrentConversationId = ticket.conversation_id;
+                    adminCurrentUserId = ticket.user_id;
+                    adminCurrentTicketId = ticket.id;
+                    
+                    const container = document.getElementById('admin-chat-container');
+                    if (container) container.classList.remove('hidden');
+                    
+                    const ticketNumber = document.getElementById('admin-chat-ticket-number');
+                    const closeTicketBtn = document.getElementById('admin-chat-close-ticket-btn');
+                    const userName = document.getElementById('admin-chat-user-name');
+                    
+                    if (ticketNumber) {
+                        ticketNumber.textContent = `Ticket ${ticket.ticket_number}`;
+                        ticketNumber.classList.remove('hidden');
+                    }
+                    if (closeTicketBtn) {
+                        if (ticket.status === 'open') {
+                            closeTicketBtn.classList.remove('hidden');
+                        } else {
+                            closeTicketBtn.classList.add('hidden');
+                        }
+                    }
+                    if (userName) {
+                        userName.textContent = ticket.user_email || 'UsuÃ¡rio';
+                    }
+                    
+                    // Carregar todas as mensagens da conversa
+                    await loadAdminChatMessages(ticket.conversation_id);
+                    
+                    // Scroll para o final da conversa
+                    const messagesContainer = document.getElementById('admin-chat-messages');
+                    if (messagesContainer) {
+                        setTimeout(() => {
+                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        }, 100);
+                    }
+                } else {
+                    window.showSuccessToast('Ticket ou conversa nÃ£o encontrada', true);
+                }
+            } catch (error) {
+                console.error('Erro ao visualizar ticket:', error);
+                window.showSuccessToast('Erro ao visualizar ticket', true);
+            }
+        }
+        
+        // Event listeners para busca e filtros de tickets
+        const ticketSearchInput = document.getElementById('ticket-search-input');
+        const ticketStatusFilter = document.getElementById('ticket-status-filter');
+        const refreshTicketsBtn = document.getElementById('refresh-tickets-btn');
+        
+        if (ticketSearchInput) {
+            ticketSearchInput.addEventListener('input', window.debounce(() => {
+                ticketsCurrentPage = 1;
+                loadTicketsPanel(1);
+            }, 300));
+        }
+        if (ticketStatusFilter) {
+            ticketStatusFilter.addEventListener('change', () => {
+                ticketsCurrentPage = 1;
+                loadTicketsPanel(1);
+            });
+        }
+        if (refreshTicketsBtn) {
+            refreshTicketsBtn.addEventListener('click', () => {
+                ticketsCurrentPage = 1;
+                loadTicketsPanel(1);
+            });
+        }
+        
+        // BotÃ£o para zerar todos os tickets
+        const clearAllTicketsBtn = document.getElementById('clear-all-tickets-btn');
+        if (clearAllTicketsBtn) {
+            clearAllTicketsBtn.addEventListener('click', () => {
+                window.showConfirmationModal(
+                    'Zerar Todos os Tickets',
+                    'Tem certeza de que deseja deletar TODOS os tickets? Esta aÃ§Ã£o Ã© irreversÃ­vel e nÃ£o pode ser desfeita!',
+                    async () => {
+                        try {
+                            await window.apiRequest('/api/chat/tickets', 'DELETE');
+                            window.showSuccessToast('Todos os tickets foram deletados com sucesso!');
+                            ticketsCurrentPage = 1;
+                            loadTicketsPanel(1);
+                        } catch (error) {
+                            console.error('Erro ao deletar tickets:', error);
+                            window.showSuccessToast(`Erro ao deletar tickets: ${error.message}`, true);
+                        }
+                    }
+                );
+            });
+        }
+        
+        // Carregar dados iniciais apenas se estiver logado
+        const token = localStorage.getItem('authToken');
+        if (token && window.appState.currentUser) {
+        loadAttendants();
+        loadQuickRepliesAdmin();
+            
+            // Carregar usuÃ¡rios para chat admin quando o painel for inicializado
+            // Usar setTimeout para garantir que o DOM foi atualizado
+            setTimeout(() => {
+                if (window.appState.currentUser && (window.appState.currentUser.role === 'admin' || window.appState.currentUser.role === 'attendant')) {
+                    loadUsersForAdminChat();
+                    // Inicializar busca de usuÃ¡rios apÃ³s carregar
+                    setTimeout(() => {
+                        if (typeof initializeAdminChatUserSearch === 'function') {
+                            initializeAdminChatUserSearch();
+                        }
+                    }, 300);
+                    
+                    if (typeof loadQueue === 'function') {
+                        loadQueue();
+                    }
+                    if (typeof loadTicketsPanel === 'function') {
+                        loadTicketsPanel();
+                    }
+                    
+                    // Limpar intervalo anterior se existir
+                    if (window.queueCheckInterval) {
+                        clearInterval(window.queueCheckInterval);
+                    }
+                    
+                    // Criar novo intervalo apenas se estiver logado
+                    if (typeof loadQueue === 'function') {
+                        window.queueCheckInterval = setInterval(loadQueue, 10000); // Atualizar a cada 10 segundos
+                    }
+                }
+            }, 200);
+        }
+        
+        // Verificar posiÃ§Ã£o na fila (para usuÃ¡rios)
+        async function checkQueuePosition() {
+            // Verificar se o usuÃ¡rio estÃ¡ logado
+            const token = localStorage.getItem('authToken');
+            if (!token || !window.appState.currentUser) {
+                if (window.queuePositionInterval) {
+                    clearInterval(window.queuePositionInterval);
+                    window.queuePositionInterval = null;
+                }
+                return;
+            }
+            
+            try {
+                const queueInfo = await window.apiRequest('/api/chat/queue', 'GET');
+                if (queueInfo && queueInfo.position) {
+                    const widgetStatus = document.getElementById('chat-status');
+                    if (widgetStatus) {
+                        widgetStatus.textContent = `Aguardando atendimento... PosiÃ§Ã£o ${queueInfo.position} na fila`;
+                    }
+                }
+            } catch (error) {
+                // Limpar intervalo se nÃ£o estiver autenticado
+                if (error.message && error.message.includes('token')) {
+                    if (window.queuePositionInterval) {
+                        clearInterval(window.queuePositionInterval);
+                        window.queuePositionInterval = null;
+                    }
+                }
+            }
+        }
+        
+        // Entrar na fila quando usuÃ¡rio abrir chat
+        async function joinQueue() {
+            // Verificar se o usuÃ¡rio estÃ¡ logado
+            const token = localStorage.getItem('authToken');
+            if (!token || !window.appState.currentUser || window.appState.currentUser.role !== 'user') {
+                return;
+            }
+            
+            // Verificar se o chat estÃ¡ habilitado antes de tentar entrar na fila
+            const chatEnabled = await isChatEnabled();
+            if (!chatEnabled) {
+                // NÃ£o tentar entrar na fila se o chat estiver desabilitado
+                return;
+            }
+            
+            try {
+                await window.apiRequest('/api/chat/queue/join', 'POST', {});
+                await checkQueuePosition();
+                
+                // Limpar intervalo anterior se existir
+                if (window.queuePositionInterval) {
+                    clearInterval(window.queuePositionInterval);
+                }
+                
+                // Criar novo intervalo apenas se estiver logado
+                if (token && window.appState.currentUser) {
+                    window.queuePositionInterval = setInterval(checkQueuePosition, 5000);
+                }
+            } catch (error) {
+                // Ignorar erros silenciosamente quando o chat estÃ¡ desabilitado
+                // NÃ£o fazer log para evitar poluir o console
+            }
+        }
+        
+        // Tornar joinQueue global para uso no widget
+        window.joinQueue = joinQueue;
+    }
